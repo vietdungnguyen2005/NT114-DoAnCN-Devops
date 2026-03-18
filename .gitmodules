@@ -1,0 +1,3 @@
+[submodule "web/TRAVEL-WEB"]
+	path = web/TRAVEL-WEB
+	url = https://github.com/vietdungnguyen2005/TRAVEL-WEB.git
