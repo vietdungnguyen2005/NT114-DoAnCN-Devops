@@ -23,8 +23,8 @@ spec:
           image: travel-web-app
           imagePullPolicy: Always
           command:
-            - npx
-            - prisma
+            - node
+            - node_modules/prisma/build/index.js
             - migrate
             - deploy
           env:
