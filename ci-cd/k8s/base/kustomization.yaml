@@ -8,7 +8,7 @@ resources:
   - deployment.yaml
   - service.yaml
   - hpa.yaml
-  - db-migration-job.yaml
+  # - db-migration-job.yaml  # Disabled: run migrations manually
   - external-secret.yaml
   - storage-class.yaml
 
