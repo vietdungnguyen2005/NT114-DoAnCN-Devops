@@ -132,9 +132,9 @@ output "argocd_namespace" {
   description = "Namespace where ArgoCD is installed"
 }
 
-output "argocd_port_forward_command" {
-  value       = "kubectl port-forward svc/argocd-server -n argocd 8080:443"
-  description = "Command to access ArgoCD UI via localhost:8080"
+output "argocd_url" {
+  value       = "http://${data.kubernetes_service.traefik.status[0].load_balancer[0].ingress[0].hostname}"
+  description = "ArgoCD UI URL via Traefik LoadBalancer"
 }
 
 output "argocd_initial_admin_password" {

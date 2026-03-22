@@ -3,8 +3,8 @@
 # ============================================================================
 # Architecture decisions:
 #   1. Dedicated "argocd" namespace — full isolation from workloads.
-#   2. ClusterIP only — no public LoadBalancer. Access via:
-#        kubectl port-forward svc/argocd-server -n argocd 8080:443
+#   2. ClusterIP + Traefik Ingress — exposed via existing NLB.
+#      Access via Traefik LoadBalancer URL.
 #   3. Pull-based GitOps — ArgoCD polls the Git manifest repo and
 #      reconciles the desired state into the target namespace ("app").
 #   4. Strict depends_on — Helm release waits for EKS + Node Groups.
@@ -51,13 +51,13 @@ resource "helm_release" "argocd" {
   wait    = true
   timeout = 600 # 10 phút — lần đầu pull images có thể lâu
 
-  # ---- ArgoCD Server: ClusterIP, không lộ ra Internet ----
+  # ---- ArgoCD Server: ClusterIP — exposed via Traefik Ingress ----
   set {
     name  = "server.service.type"
     value = "ClusterIP"
   }
 
-  # Tắt TLS trên ArgoCD server (sẽ port-forward plaintext qua kubectl)
+  # Tắt TLS nội bộ — Traefik sẽ handle TLS termination
   set {
     name  = "configs.params.server\\.insecure"
     value = "true"
@@ -139,6 +139,43 @@ resource "kubernetes_manifest" "argocd_app" {
             duration    = "5s"
             factor      = 2
             maxDuration = "3m"
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [helm_release.argocd]
+}
+
+# ---------------------------------------------------------------------------
+# 4. Ingress — Expose ArgoCD qua Traefik NLB (không cần domain)
+# ---------------------------------------------------------------------------
+resource "kubernetes_ingress_v1" "argocd" {
+  metadata {
+    name      = "argocd-external"
+    namespace = kubernetes_namespace.argocd.metadata[0].name
+    annotations = {
+      "traefik.ingress.kubernetes.io/router.entrypoints" = "web"
+    }
+  }
+
+  spec {
+    ingress_class_name = "traefik"
+
+    # Rule không có host → match tất cả traffic đến path /
+    rule {
+      http {
+        path {
+          path      = "/"
+          path_type = "Prefix"
+          backend {
+            service {
+              name = "argocd-server"
+              port {
+                number = 80
+              }
+            }
           }
         }
       }

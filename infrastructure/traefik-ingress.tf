@@ -135,9 +135,26 @@ resource "helm_release" "traefik" {
 }
 
 # ---------------------------------------------------------------------------
+# Data source — Traefik Service (để lấy NLB external hostname)
+# ---------------------------------------------------------------------------
+data "kubernetes_service" "traefik" {
+  metadata {
+    name      = "traefik"
+    namespace = kubernetes_namespace.traefik.metadata[0].name
+  }
+
+  depends_on = [helm_release.traefik]
+}
+
+# ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
 output "traefik_namespace" {
   value       = kubernetes_namespace.traefik.metadata[0].name
   description = "Namespace where Traefik Ingress Controller is installed"
+}
+
+output "traefik_lb_url" {
+  value       = "http://${data.kubernetes_service.traefik.status[0].load_balancer[0].ingress[0].hostname}"
+  description = "Traefik LoadBalancer external URL"
 }
