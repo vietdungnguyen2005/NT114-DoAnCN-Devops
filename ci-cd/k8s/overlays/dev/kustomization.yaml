@@ -20,8 +20,9 @@ images:
     newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-app
     newTag: latest
 
-commonLabels:
-  environment: development
+labels:
+  - pairs:
+      environment: development
 
 configMapGenerator:
   - name: app-config

@@ -17,6 +17,7 @@ images:
     newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-app
     newTag: latest
 
-commonLabels:
-  app.kubernetes.io/managed-by: kustomize
-  app.kubernetes.io/part-of: travel-web
+labels:
+  - pairs:
+      app.kubernetes.io/managed-by: kustomize
+      app.kubernetes.io/part-of: travel-web
