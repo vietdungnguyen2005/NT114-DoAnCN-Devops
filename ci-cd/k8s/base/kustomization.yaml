@@ -7,6 +7,7 @@ resources:
   - namespace.yaml
   - deployment.yaml
   - service.yaml
+  - ingress.yaml
   - hpa.yaml
   # - db-migration-job.yaml  # Disabled: run migrations manually
   # - external-secret.yaml  # Disabled: using manual K8s secret (ESO controller not installed)
