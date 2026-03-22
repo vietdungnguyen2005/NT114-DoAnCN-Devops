@@ -8,14 +8,10 @@
 # ============================================================================
 
 # ---------------------------------------------------------------------------
-# Data: OIDC provider from EKS
+# OIDC provider from EKS module outputs (no data source needed)
 # ---------------------------------------------------------------------------
-data "aws_iam_openid_connect_provider" "eks" {
-  url = module.eks.cluster_oidc_issuer_url
-}
-
 locals {
-  oidc_provider_arn = data.aws_iam_openid_connect_provider.eks.arn
+  oidc_provider_arn = module.eks.oidc_provider_arn
   oidc_issuer       = replace(module.eks.cluster_oidc_issuer_url, "https://", "")
   app_namespace     = "app"
   app_sa_name       = "travel-web-sa"

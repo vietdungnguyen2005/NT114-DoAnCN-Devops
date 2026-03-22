@@ -32,6 +32,17 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
+# Dummy env vars for build time only (real values injected at runtime via Secrets Manager)
+ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy"
+ENV NEXTAUTH_SECRET="build-time-placeholder"
+ENV NEXTAUTH_URL="http://localhost:3000"
+ENV STRIPE_SECRET_KEY="sk_test_build_placeholder"
+ENV STRIPE_WEBHOOK_SECRET="whsec_build_placeholder"
+ENV CLOUDINARY_API_KEY="build_placeholder"
+ENV CLOUDINARY_API_SECRET="build_placeholder"
+ENV CLOUDINARY_CLOUD_NAME="build_placeholder"
+ENV RESEND_API_KEY="re_build_placeholder"
+
 # Build the Next.js application
 RUN npm run build
 

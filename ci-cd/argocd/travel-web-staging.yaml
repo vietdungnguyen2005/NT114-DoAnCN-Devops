@@ -16,8 +16,8 @@ spec:
   project: default
 
   source:
-    repoURL: https://github.com/vietdungnguyen2005/NT114-DoAnCN-Devops.git
-    targetRevision: test  # Track test branch for staging
+    repoURL: https://gitlab.com/vietdungnguyen2005/nt114-doancn-devops.git
+    targetRevision: microservice  # Track microservice branch for staging
     path: ci-cd/k8s/overlays/staging
 
   destination:

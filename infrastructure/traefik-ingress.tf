@@ -55,6 +55,7 @@ resource "helm_release" "traefik" {
   set {
     name  = "service.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-cross-zone-load-balancing-enabled"
     value = "true"
+    type  = "string"
   }
 
   # --- Ports: HTTP (80) and HTTPS (443) entrypoints ---

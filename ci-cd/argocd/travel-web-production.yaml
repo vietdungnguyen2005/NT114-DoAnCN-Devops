@@ -17,7 +17,7 @@ spec:
   project: default
 
   source:
-    repoURL: https://github.com/vietdungnguyen2005/NT114-DoAnCN-Devops.git
+    repoURL: https://gitlab.com/vietdungnguyen2005/nt114-doancn-devops.git
     targetRevision: main  # Production tracks main branch only
     path: ci-cd/k8s/overlays/production
 
