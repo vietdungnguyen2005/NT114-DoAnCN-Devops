@@ -141,3 +141,4 @@ logs/
 *.temp
 .cache/
 coverage/
+PROMPT.md
