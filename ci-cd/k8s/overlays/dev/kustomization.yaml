@@ -11,9 +11,7 @@ patches:
   - path: patches/resources.yaml
   - path: patches/env.yaml
 
-replicas:
-  - name: travel-web
-    count: 1
+# Không set replicas ở đây — để HPA quản lý (minReplicas: 2)
 
 images:
   - name: travel-web-app

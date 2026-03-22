@@ -9,7 +9,7 @@ resources:
   - service.yaml
   - hpa.yaml
   # - db-migration-job.yaml  # Disabled: run migrations manually
-  - external-secret.yaml
+  # - external-secret.yaml  # Disabled: using manual K8s secret (ESO controller not installed)
   - storage-class.yaml
 
 images:
