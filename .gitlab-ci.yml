@@ -290,6 +290,7 @@ full-test-scan:
         echo "⏭️  Skipping full-test-scan (STRATEGY=${STRATEGY})"
         exit 0
       fi
+    - apt-get update -qq && apt-get install -y -qq unzip > /dev/null
     - cd web/TRAVEL-WEB
     - npm ci
   script:
@@ -331,15 +332,20 @@ full-test-scan:
       echo "📦 Running SonarCloud scan..."
       cd "${CI_PROJECT_DIR}"
 
-      # Install sonar-scanner
-      SONAR_SCANNER_VERSION="5.0.1.3006"
-      curl -sSLo sonar-scanner.zip "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip"
-      unzip -q sonar-scanner.zip
-      export PATH="${CI_PROJECT_DIR}/sonar-scanner-${SONAR_SCANNER_VERSION}-linux/bin:${PATH}"
+      # Install sonar-scanner (version recommended by SonarCloud)
+      SONAR_SCANNER_VERSION="8.0.1.6346"
+      SONAR_SCANNER_HOME="${CI_PROJECT_DIR}/.sonar/sonar-scanner-${SONAR_SCANNER_VERSION}-linux-x64"
+      curl --create-dirs -sSLo "${CI_PROJECT_DIR}/.sonar/sonar-scanner.zip" \
+        "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux-x64.zip"
+      unzip -o "${CI_PROJECT_DIR}/.sonar/sonar-scanner.zip" -d "${CI_PROJECT_DIR}/.sonar/"
+      export PATH="${SONAR_SCANNER_HOME}/bin:${PATH}"
 
       sonar-scanner \
         -Dproject.settings=ci-cd/sonarqube/sonar-project.properties \
         -Dsonar.projectBaseDir="${CI_PROJECT_DIR}" \
+        -Dsonar.organization=vietdungnguyen2005 \
+        -Dsonar.projectKey=vietdungnguyen2005_NT114-DoAnCN-Devops \
+        -Dsonar.host.url="${SONAR_HOST_URL:-https://sonarcloud.io}" \
         -Dsonar.scm.provider=git \
         -Dsonar.token="${SONAR_TOKEN}"
       echo "✅ SonarCloud scan complete"
