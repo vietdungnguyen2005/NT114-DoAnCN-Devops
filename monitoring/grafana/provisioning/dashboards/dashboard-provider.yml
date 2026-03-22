@@ -1,0 +1,19 @@
+# =============================================================================
+# Grafana Dashboard Provider — TRAVEL-WEB
+# =============================================================================
+# Loads dashboard JSON files from the provisioning directory on startup.
+# =============================================================================
+
+apiVersion: 1
+
+providers:
+  - name: "Travel-Web Dashboards"
+    orgId: 1
+    folder: "Travel-Web"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

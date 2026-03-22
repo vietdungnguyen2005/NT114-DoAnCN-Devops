@@ -1,0 +1,60 @@
+name: Validate K8s Manifests
+
+on:
+  pull_request:
+    branches: [main, test]
+    paths:
+      - 'ci-cd/k8s/**'
+      - 'scripts/validate-kustomize.sh'
+
+jobs:
+  validate-kustomize:
+    name: Validate Kustomize Configurations
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+          kustomize version
+
+      - name: Validate Kustomize Configs
+        run: |
+          chmod +x scripts/validate-kustomize.sh
+          bash scripts/validate-kustomize.sh
+
+      - name: Generate Preview Manifests
+        run: |
+          echo "## Kustomize Build Preview" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          for env in dev staging production; do
+            if [ -d "ci-cd/k8s/overlays/$env" ]; then
+              echo "### Environment: $env" >> $GITHUB_STEP_SUMMARY
+              echo '```yaml' >> $GITHUB_STEP_SUMMARY
+              kustomize build ci-cd/k8s/overlays/$env | head -n 50 >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+  validate-yaml:
+    name: Validate YAML Syntax
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Lint YAML files
+        run: |
+          yamllint -d '{extends: default, rules: {line-length: {max: 120}, comments: disable}}' \
+            ci-cd/k8s/ \
+            ci-cd/argocd/ || true

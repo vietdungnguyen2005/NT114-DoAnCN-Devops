@@ -1,0 +1,17 @@
+# Production resource limits - higher resources for performance
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: travel-web
+spec:
+  template:
+    spec:
+      containers:
+        - name: travel-web
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

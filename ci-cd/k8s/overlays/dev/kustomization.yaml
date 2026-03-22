@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: travel-web-dev
+resources:
+  - ../../base
+
+namePrefix: dev-
+
+patches:
+  - path: patches/resources.yaml
+  - path: patches/env.yaml
+
+replicas:
+  - name: travel-web
+    count: 1
+
+images:
+  - name: travel-web-app
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-app
+    newTag: latest
+
+commonLabels:
+  environment: development
+
+configMapGenerator:
+  - name: app-config
+    literals:
+      - ENVIRONMENT=development
+      - DEBUG=true

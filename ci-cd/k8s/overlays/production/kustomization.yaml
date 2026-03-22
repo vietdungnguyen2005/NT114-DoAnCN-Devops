@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: travel-web-production
+resources:
+  - ../../base
+
+namePrefix: prod-
+
+patches:
+  - path: patches/resources.yaml
+  - path: patches/env.yaml
+
+replicas:
+  - name: travel-web
+    count: 3
+
+images:
+  - name: travel-web-app
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-app
+    newTag: latest
+
+commonLabels:
+  environment: production
+
+configMapGenerator:
+  - name: app-config
+    literals:
+      - ENVIRONMENT=production
+      - DEBUG=false

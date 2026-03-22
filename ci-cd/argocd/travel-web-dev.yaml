@@ -1,0 +1,48 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: travel-web-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    environment: development
+    app: travel-web
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/vietdungnguyen2005/NT114-DoAnCN-Devops.git
+    targetRevision: test  # Track test branch for dev environment
+    path: ci-cd/k8s/overlays/dev
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: travel-web-dev
+
+  syncPolicy:
+    automated:
+      prune: true       # Automatically delete resources removed from Git
+      selfHeal: true    # Automatically sync when cluster state deviates
+      allowEmpty: false # Prevent deletion of all resources
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - PrunePropagationPolicy=foreground
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Keep history of last 10 deployments
+  revisionHistoryLimit: 10
+
+  # Ignore differences in replicas (allow HPA to manage scaling)
+  ignoreDifferences:
+    - group: argoproj.io
+      kind: Rollout
+      jsonPointers:
+        - /spec/replicas

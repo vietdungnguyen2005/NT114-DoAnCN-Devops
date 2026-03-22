@@ -1,0 +1,240 @@
+# =============================================================================
+# kube-prometheus-stack Helm Values — TRAVEL-WEB
+# =============================================================================
+# Install:
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm repo update
+#   helm install monitoring prometheus-community/kube-prometheus-stack \
+#     --namespace monitoring --create-namespace \
+#     -f k8s-manifests/monitoring/values.yaml \
+#     --wait --timeout 10m
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Prometheus
+# ---------------------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    # Resources sized for t3.medium nodes
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+
+    # Data retention
+    retention: 7d
+    retentionSize: 5GB
+
+    # Scrape all ServiceMonitors across all namespaces
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+
+    # Persistent storage via gp3
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+
+    # Additional scrape configs for travel-web + OTel Collector
+    additionalScrapeConfigs:
+      # Travel-Web Next.js app metrics
+      - job_name: travel-web-nextjs
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [travel-web, travel-web-staging, travel-web-production]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: travel-web
+          - source_labels:
+              [__meta_kubernetes_pod_ip]
+            action: replace
+            target_label: __address__
+            regex: (.+)
+            replacement: "${1}:3000"
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+        metrics_path: /api/metrics
+
+      # OpenTelemetry Collector self-metrics
+      - job_name: otel-collector
+        kubernetes_sd_configs:
+          - role: service
+            namespaces:
+              names: [monitoring]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            action: keep
+            regex: otel-collector.*
+          - source_labels: [__meta_kubernetes_service_port_name]
+            action: keep
+            regex: prometheus
+
+      # PostgreSQL metrics (if running in-cluster)
+      - job_name: postgres
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [travel-web, travel-web-staging, travel-web-production]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: postgres
+          - source_labels:
+              [__meta_kubernetes_pod_ip]
+            action: replace
+            target_label: __address__
+            regex: (.+)
+            replacement: "${1}:9187"
+
+  # Expose Prometheus internally via ClusterIP
+  service:
+    type: ClusterIP
+
+# ---------------------------------------------------------------------------
+# Grafana
+# ---------------------------------------------------------------------------
+grafana:
+  enabled: true
+
+  adminUser: admin
+  adminPassword: admin   # Change after deployment or use Secrets Manager
+
+  service:
+    type: LoadBalancer
+    port: 80
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: nlb
+      service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  persistence:
+    enabled: true
+    storageClassName: gp3
+    size: 5Gi
+
+  env:
+    TZ: Asia/Ho_Chi_Minh
+
+  # Dashboard providers
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: custom
+          orgId: 1
+          folder: "Travel-Web"
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/custom
+
+  # Pre-built dashboards from Grafana.com
+  dashboards:
+    custom:
+      # Kubernetes Cluster Overview
+      k8s-cluster:
+        gnetId: 7249
+        revision: 1
+        datasource: Prometheus
+
+      # Node Exporter Full
+      node-exporter:
+        gnetId: 1860
+        revision: 37
+        datasource: Prometheus
+
+      # NGINX Ingress Controller
+      nginx-ingress:
+        gnetId: 9614
+        revision: 1
+        datasource: Prometheus
+
+      # Loki Dashboard
+      loki-dashboard:
+        gnetId: 13407
+        revision: 1
+        datasource: Prometheus
+
+  # Additional datasources: Loki + CloudWatch
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      url: http://loki-gateway.monitoring.svc.cluster.local:80
+      access: proxy
+      isDefault: false
+      jsonData:
+        maxLines: 1000
+
+    - name: CloudWatch
+      type: cloudwatch
+      access: proxy
+      jsonData:
+        authType: default          # Uses IRSA / instance profile
+        defaultRegion: ap-southeast-1
+      isDefault: false
+
+  # Grafana server config
+  grafana.ini:
+    server:
+      root_url: "%(protocol)s://%(domain)s/"
+    auth.anonymous:
+      enabled: false
+    security:
+      allow_embedding: true
+
+# ---------------------------------------------------------------------------
+# AlertManager
+# ---------------------------------------------------------------------------
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+# ---------------------------------------------------------------------------
+# Node Exporter — EC2 node system metrics
+# ---------------------------------------------------------------------------
+nodeExporter:
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# kube-state-metrics — Kubernetes object metrics
+# ---------------------------------------------------------------------------
+kubeStateMetrics:
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# Disable EKS-managed components (not accessible)
+# ---------------------------------------------------------------------------
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false

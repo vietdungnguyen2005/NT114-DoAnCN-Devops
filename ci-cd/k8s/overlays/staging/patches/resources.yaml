@@ -1,0 +1,17 @@
+# Staging resource limits - moderate resources
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: travel-web
+spec:
+  template:
+    spec:
+      containers:
+        - name: travel-web
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

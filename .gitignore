@@ -1,0 +1,143 @@
+# =============================================================================
+# .gitignore — TRAVEL-WEB DevOps Repository
+# =============================================================================
+# Covers: Terraform, Node.js, Python, Docker, IDE, OS, Secrets, K8s
+# =============================================================================
+
+# ----- Terraform -----
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.tfvars
+!*.tfvars.example
+.terraformrc
+terraform.rc
+.terraform.tfstate.lock.info
+
+# ----- Node.js -----
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.next/
+out/
+.nuxt/
+dist/
+build/
+.cache/
+.parcel-cache/
+.turbo/
+*.tsbuildinfo
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+.eggs/
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ----- Secrets & Credentials -----
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+credentials.json
+service-account*.json
+kubeconfig
+kubeconfig.*
+access_info.txt
+**/secrets/
+*.secret
+.aws/
+
+# ----- IDE / Editor -----
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# ----- OS -----
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ----- Docker -----
+docker-compose.override.yml
+.docker/
+
+# ----- Kubernetes -----
+*.kubeconfig
+helm-charts/*.tgz
+
+# ----- Monitoring (local data) -----
+prometheus-data/
+grafana-data/
+loki-data/
+
+# ----- Logs -----
+*.log
+logs/
+
+# ----- Compiled / Binary -----
+*.exe
+*.dll
+*.dylib
+*.bin
+*.o
+*.obj
+*.class
+*.jar
+*.war
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+
+# ----- Misc -----
+.vagrant/
+*.bak
+*.tmp
+*.temp
+.cache/
+coverage/

@@ -1,0 +1,42 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: travel-web-db-migrate
+  labels:
+    app: travel-web
+    component: db-migration
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: travel-web
+        component: db-migration
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: travel-web-app
+          imagePullPolicy: Always
+          command:
+            - npx
+            - prisma
+            - migrate
+            - deploy
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: DATABASE_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi

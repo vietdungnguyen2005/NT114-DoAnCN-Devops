@@ -1,0 +1,79 @@
+name: Update Submodule
+
+on:
+  repository_dispatch:
+    types: [update-submodule]
+
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Enter TRAVEL-WEB Commit SHA (leave empty for latest main)'
+        required: false
+        type: string
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Checkout DevOps repo with submodules
+      - name: Checkout DevOps Repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.DEVOPS_PAT }}
+          submodules: true
+          fetch-depth: 0
+
+      # 2. Update submodule to target commit
+      - name: Update Submodule Code
+        id: update
+        run: |
+          cd web/TRAVEL-WEB
+          git fetch origin
+
+          # Logic to select Commit ID
+          if [ -n "${{ github.event.client_payload.sha }}" ]; then
+            echo "🔥 Mode: Auto Trigger from TRAVEL-WEB"
+            TARGET="${{ github.event.client_payload.sha }}"
+            PATHS="${{ github.event.client_payload.paths }}"
+            if [ -n "$PATHS" ]; then
+              echo "📝 Changed: $PATHS"
+            fi
+
+          elif [ -n "${{ inputs.sha }}" ]; then
+            echo "👋 Mode: Manual Input"
+            TARGET="${{ inputs.sha }}"
+
+          else
+            echo "⚡ Mode: Manual Default (Latest Main)"
+            TARGET="origin/main"
+          fi
+
+          echo "Checking out to: $TARGET"
+          git checkout $TARGET
+
+          # Get actual commit hash after checkout
+          ACTUAL_SHA=$(git rev-parse HEAD)
+          echo "target_sha=$ACTUAL_SHA" >> $GITHUB_OUTPUT
+          echo "changed_paths=$PATHS" >> $GITHUB_OUTPUT
+          cd ../..
+
+      # 3. Commit & Push (only push if there are changes)
+      - name: Commit and Push
+        run: |
+          git config --global user.name 'CI/CD Bot'
+          git config --global user.email 'ci-cd-bot@users.noreply.github.com'
+
+          if [[ -n $(git status -s) ]]; then
+            COMMIT_MSG="chore: update submodule TRAVEL-WEB to ${{ steps.update.outputs.target_sha }}"
+
+            if [[ -n "${{ steps.update.outputs.changed_paths }}" ]]; then
+              COMMIT_MSG="$COMMIT_MSG [${{ steps.update.outputs.changed_paths }}]"
+            fi
+
+            git add .
+            git commit -m "$COMMIT_MSG"
+            git push origin main
+            echo "✅ Submodule updated and pushed"
+          else
+            echo "✅ Submodule is already up to date. No changes."
+          fi

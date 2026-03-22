@@ -1,0 +1,14 @@
+# =============================================================
+# Trivy Ignore File for TRAVEL-WEB
+# Add CVE IDs here to suppress known/accepted vulnerabilities
+# =============================================================
+
+# --- Accepted Risks (with justification) ---
+
+# Example: Node.js base image known issues that are mitigated at network layer
+# CVE-2024-XXXXX
+
+# --- False Positives ---
+
+# --- Dev-only dependencies (not in production image) ---
+# These are only present during build stage and not in the final image

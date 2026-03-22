@@ -1,0 +1,376 @@
+# =============================================================================
+# OpenTelemetry Collector — DaemonSet Configuration for EKS
+# =============================================================================
+# Deploys an OTel Collector agent on every node to collect:
+#   - Application metrics (OTLP) → forwarded to Prometheus
+#   - Container logs (filelog receiver) → forwarded to Loki
+#   - Kubernetes metadata enrichment via k8sattributes processor
+#
+# Install via:
+#   kubectl apply -f k8s-manifests/monitoring/otel-collector.yaml
+#
+# Or use the OpenTelemetry Operator Helm chart for CRD-based management.
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: agent
+data:
+  otel-collector-config.yaml: |
+    receivers:
+      # ---------------------------------------------------------------
+      # OTLP receiver — accepts traces and metrics from instrumented apps
+      # ---------------------------------------------------------------
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+      # ---------------------------------------------------------------
+      # Prometheus receiver — scrape /api/metrics from travel-web pods
+      # ---------------------------------------------------------------
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: 'travel-web-otel'
+              scrape_interval: 15s
+              kubernetes_sd_configs:
+                - role: pod
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_label_app]
+                  action: keep
+                  regex: travel-web
+                - source_labels: [__meta_kubernetes_pod_ip]
+                  action: replace
+                  target_label: __address__
+                  regex: (.+)
+                  replacement: "$${1}:3000"
+                - source_labels: [__meta_kubernetes_namespace]
+                  target_label: namespace
+                - source_labels: [__meta_kubernetes_pod_name]
+                  target_label: pod
+              metrics_path: /api/metrics
+
+      # ---------------------------------------------------------------
+      # Filelog receiver — collect container logs from node filesystem
+      # ---------------------------------------------------------------
+      filelog:
+        include:
+          - /var/log/pods/travel-web*/*/*.log
+          - /var/log/pods/travel-web-staging*/*/*.log
+          - /var/log/pods/travel-web-production*/*/*.log
+        exclude:
+          - /var/log/pods/*/otel-collector/*.log
+        start_at: end
+        include_file_path: true
+        include_file_name: false
+        operators:
+          # Parse CRI-O / containerd log format
+          - type: router
+            id: container_format_router
+            routes:
+              - output: parser-crio
+                expr: 'body matches "^[^ Z]+Z"'
+              - output: parser-containerd
+                expr: 'body matches "^[^ ]+ "'
+          - type: regex_parser
+            id: parser-crio
+            regex: '^(?P<time>[^ Z]+Z) (?P<stream>\w+) (?P<logtag>\w)? ?(?P<log>.*)$'
+            timestamp:
+              parse_from: attributes.time
+              layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+          - type: regex_parser
+            id: parser-containerd
+            regex: '^(?P<time>[^ ]+) (?P<stream>\w+) (?P<logtag>\w)? ?(?P<log>.*)$'
+            timestamp:
+              parse_from: attributes.time
+              layout: '%Y-%m-%dT%H:%M:%S.%L%j'
+          # Move parsed log body
+          - type: move
+            from: attributes.log
+            to: body
+
+      # ---------------------------------------------------------------
+      # Host metrics — node-level CPU, memory, disk, network
+      # ---------------------------------------------------------------
+      hostmetrics:
+        collection_interval: 30s
+        scrapers:
+          cpu: {}
+          memory: {}
+          disk: {}
+          network: {}
+          filesystem: {}
+
+    processors:
+      # Batch for efficiency
+      batch:
+        send_batch_size: 1024
+        timeout: 5s
+
+      # Enrich with Kubernetes metadata
+      k8sattributes:
+        auth_type: "serviceAccount"
+        passthrough: false
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.node.name
+            - k8s.deployment.name
+            - k8s.container.name
+          labels:
+            - tag_name: app
+              key: app
+              from: pod
+            - tag_name: environment
+              key: environment
+              from: pod
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.ip
+
+      # Memory limiter to prevent OOM
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: 400
+        spike_limit_mib: 100
+
+      # Add resource attributes
+      resource:
+        attributes:
+          - key: cluster.name
+            value: travel-web-eks
+            action: upsert
+          - key: service.name
+            value: travel-web
+            action: insert
+
+    exporters:
+      # ---------------------------------------------------------------
+      # Prometheus exporter — expose metrics for Prometheus to scrape
+      # ---------------------------------------------------------------
+      prometheus:
+        endpoint: 0.0.0.0:8889
+        namespace: otel
+        send_timestamps: true
+        resource_to_telemetry_conversion:
+          enabled: true
+
+      # ---------------------------------------------------------------
+      # Loki exporter — push logs to Loki
+      # ---------------------------------------------------------------
+      loki:
+        endpoint: http://loki-gateway.monitoring.svc.cluster.local:80/loki/api/v1/push
+        default_labels_enabled:
+          exporter: true
+          job: true
+        labels:
+          attributes:
+            k8s.namespace.name: "namespace"
+            k8s.pod.name: "pod"
+            k8s.container.name: "container"
+            k8s.deployment.name: "deployment"
+            app: "app"
+
+      # ---------------------------------------------------------------
+      # OTLP exporter — forward to central collector (if needed)
+      # ---------------------------------------------------------------
+      # otlp:
+      #   endpoint: "central-collector.monitoring.svc.cluster.local:4317"
+      #   tls:
+      #     insecure: true
+
+      # ---------------------------------------------------------------
+      # Debug exporter (development only)
+      # ---------------------------------------------------------------
+      # debug:
+      #   verbosity: detailed
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      zpages:
+        endpoint: 0.0.0.0:55679
+
+    service:
+      extensions: [health_check, zpages]
+      pipelines:
+        metrics:
+          receivers: [otlp, prometheus, hostmetrics]
+          processors: [memory_limiter, k8sattributes, batch, resource]
+          exporters: [prometheus]
+        logs:
+          receivers: [filelog]
+          processors: [memory_limiter, k8sattributes, batch, resource]
+          exporters: [loki]
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: otel-collector
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-collector
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "namespaces", "nodes", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "deployments"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otel-collector
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector
+    namespace: monitoring
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-collector-agent
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector
+        app.kubernetes.io/component: agent
+    spec:
+      serviceAccountName: otel-collector
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.96.0
+          args:
+            - "--config=/etc/otelcol/otel-collector-config.yaml"
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+              protocol: TCP
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+            - name: prometheus
+              containerPort: 8889
+              protocol: TCP
+            - name: health
+              containerPort: 13133
+              protocol: TCP
+            - name: zpages
+              containerPort: 55679
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+      tolerations:
+        - operator: Exists
+          effect: NoSchedule
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: agent
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: agent
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+      protocol: TCP
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+      protocol: TCP
+    - name: prometheus
+      port: 8889
+      targetPort: 8889
+      protocol: TCP

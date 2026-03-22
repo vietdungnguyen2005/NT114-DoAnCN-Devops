@@ -1,0 +1,105 @@
+# =============================================================================
+# ServiceMonitor — Travel-Web Next.js Application
+# =============================================================================
+# Tells Prometheus (via Prometheus Operator) to auto-discover and scrape
+# metrics from travel-web pods across all environment namespaces.
+# =============================================================================
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: travel-web-metrics
+  namespace: monitoring
+  labels:
+    release: monitoring           # Must match Prometheus Helm release name
+    app: travel-web
+spec:
+  namespaceSelector:
+    matchNames:
+      - travel-web
+      - travel-web-staging
+      - travel-web-production
+  selector:
+    matchLabels:
+      app: travel-web
+  endpoints:
+    - port: http
+      interval: 15s
+      path: /api/metrics
+      scheme: http
+      scrapeTimeout: 10s
+      honorLabels: true
+
+---
+# =============================================================================
+# ServiceMonitor — PostgreSQL Exporter
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: postgres-metrics
+  namespace: monitoring
+  labels:
+    release: monitoring
+    app: postgres
+spec:
+  namespaceSelector:
+    matchNames:
+      - travel-web
+      - travel-web-staging
+      - travel-web-production
+  selector:
+    matchLabels:
+      app: postgres-exporter
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+
+---
+# =============================================================================
+# ServiceMonitor — OpenTelemetry Collector (self-metrics)
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: otel-collector-metrics
+  namespace: monitoring
+  labels:
+    release: monitoring
+    app: otel-collector
+spec:
+  namespaceSelector:
+    matchNames:
+      - monitoring
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  endpoints:
+    - port: prometheus
+      interval: 30s
+      path: /metrics
+
+---
+# =============================================================================
+# ServiceMonitor — Loki (self-metrics)
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: loki-metrics
+  namespace: monitoring
+  labels:
+    release: monitoring
+    app: loki
+spec:
+  namespaceSelector:
+    matchNames:
+      - monitoring
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  endpoints:
+    - port: http-metrics
+      interval: 30s
+      path: /metrics

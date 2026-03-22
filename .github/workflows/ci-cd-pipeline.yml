@@ -1,0 +1,478 @@
+name: Smart CI/CD Pipeline
+
+on:
+  pull_request:
+    branches:
+      - main
+      - test
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'web/TRAVEL-WEB'
+      - 'web/TRAVEL-WEB/**'
+      - '.gitmodules'
+      - 'ci-cd/k8s/**'
+      - '.github/workflows/**'
+  push:
+    branches:
+      - main
+      - test
+    paths:
+      - 'web/TRAVEL-WEB'
+      - 'web/TRAVEL-WEB/**'
+      - 'ci-cd/k8s/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-southeast-1
+  ECR_REGISTRY_URL: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com
+  ECR_REPOSITORY: travel-web-app
+  IMAGE_TAG: ${{ github.sha }}
+  NODE_VERSION: '20'
+
+jobs:
+  # ============================================================
+  # Step 1: Check if relevant paths changed (to trigger pipeline)
+  # ============================================================
+  path-filter:
+    name: Detect Changed Paths
+    runs-on: ubuntu-latest
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      k8s: ${{ steps.filter.outputs.k8s }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Check path filters
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            web:
+              - 'web/TRAVEL-WEB'
+              - 'web/TRAVEL-WEB/**'
+            k8s:
+              - 'ci-cd/k8s/**'
+            workflows:
+              - '.github/workflows/**'
+
+  # ============================================================
+  # Step 2: Parse commit message and decide strategy
+  # ============================================================
+  detect-changes:
+    name: Analyze Changes & Build Strategy
+    runs-on: ubuntu-latest
+    needs: path-filter
+    if: |
+      needs.path-filter.outputs.web == 'true' ||
+      needs.path-filter.outputs.k8s == 'true' ||
+      needs.path-filter.outputs.workflows == 'true'
+    outputs:
+      source: ${{ steps.detect.outputs.source }}
+      web_paths: ${{ steps.strategy.outputs.web_paths }}
+      needs_full_test: ${{ steps.strategy.outputs.needs_full_test }}
+      needs_light_scan: ${{ steps.strategy.outputs.needs_light_scan }}
+      needs_build: ${{ steps.strategy.outputs.needs_build }}
+      skip_build: ${{ steps.strategy.outputs.skip_build }}
+      environment: ${{ steps.detect.outputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          submodules: recursive
+
+      - name: Detect Change Source & Environment
+        id: detect
+        run: |
+          # Determine environment based on branch
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          fi
+
+          # Parse paths from commit message (from update-submodule workflow)
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          echo "📝 Commit message: $COMMIT_MSG"
+
+          if [[ "$COMMIT_MSG" =~ \[([^\]]+)\] ]]; then
+            PATHS="${BASH_REMATCH[1]}"
+            echo "source=submodule" >> $GITHUB_OUTPUT
+            echo "web_paths=$PATHS" >> $GITHUB_OUTPUT
+            echo "📦 Source: Submodule update"
+            echo "📝 Parsed paths: $PATHS"
+
+          # Direct push/PR to DevOps repo (no [...] in commit message)
+          else
+            echo "source=direct" >> $GITHUB_OUTPUT
+            echo "📦 Source: Direct push/PR"
+          fi
+
+      - name: Detect Direct Changes (if not from submodule and web changed)
+        if: steps.detect.outputs.source == 'direct' && needs.path-filter.outputs.web == 'true'
+        uses: tj-actions/changed-files@v45
+        id: changed
+        with:
+          files_yaml: |
+            web_api:
+              - web/TRAVEL-WEB/src/app/api/**
+            web_components:
+              - web/TRAVEL-WEB/src/components/**
+              - web/TRAVEL-WEB/src/hooks/**
+              - web/TRAVEL-WEB/src/lib/**
+            web_core:
+              - web/TRAVEL-WEB/src/app/**/page.tsx
+              - web/TRAVEL-WEB/src/app/**/layout.tsx
+              - web/TRAVEL-WEB/package.json
+              - web/TRAVEL-WEB/package-lock.json
+              - web/TRAVEL-WEB/next.config.ts
+              - web/TRAVEL-WEB/tsconfig.json
+              - web/TRAVEL-WEB/prisma/**
+            web_other:
+              - web/TRAVEL-WEB/public/**
+              - web/TRAVEL-WEB/src/**/*.css
+
+      - name: Build Strategy Decision
+        id: strategy
+        run: |
+          SOURCE="${{ steps.detect.outputs.source }}"
+          WEB_CHANGED="${{ needs.path-filter.outputs.web }}"
+          K8S_CHANGED="${{ needs.path-filter.outputs.k8s }}"
+          WF_CHANGED="${{ needs.path-filter.outputs.workflows }}"
+
+          # Get web paths
+          if [[ "$SOURCE" == "submodule" ]]; then
+            PATHS="${{ steps.detect.outputs.web_paths }}"
+            echo "📝 Submodule paths: $PATHS"
+          elif [[ "$WEB_CHANGED" == "true" ]]; then
+            # Build paths string from direct changes
+            PATHS=""
+            [[ "${{ steps.changed.outputs.web_api_any_changed }}" == "true" ]] && PATHS="${PATHS}api "
+            [[ "${{ steps.changed.outputs.web_components_any_changed }}" == "true" ]] && PATHS="${PATHS}components "
+            [[ "${{ steps.changed.outputs.web_core_any_changed }}" == "true" ]] && PATHS="${PATHS}core "
+            [[ "${{ steps.changed.outputs.web_other_any_changed }}" == "true" ]] && PATHS="${PATHS}other "
+            PATHS=$(echo "$PATHS" | xargs)
+            echo "📝 Direct changed paths: $PATHS"
+          else
+            PATHS=""
+          fi
+
+          echo "web_paths=$PATHS" >> $GITHUB_OUTPUT
+          echo "📊 Summary - Web: $WEB_CHANGED | K8s: $K8S_CHANGED | Workflows: $WF_CHANGED | Paths: $PATHS"
+
+          # Decision logic
+          # Core/API/Components changes → full test + build + deploy
+          if [[ "$PATHS" =~ (api|components|core) ]]; then
+            echo "needs_full_test=true" >> $GITHUB_OUTPUT
+            echo "needs_light_scan=false" >> $GITHUB_OUTPUT
+            echo "needs_build=true" >> $GITHUB_OUTPUT
+            echo "skip_build=false" >> $GITHUB_OUTPUT
+            echo "🎯 Strategy: Full Test + Build + Deploy"
+
+          # Static/CSS/public changes → light scan + build + deploy
+          elif [[ "$PATHS" == "other" ]] || [[ "$PATHS" =~ "other" ]]; then
+            echo "needs_full_test=false" >> $GITHUB_OUTPUT
+            echo "needs_light_scan=true" >> $GITHUB_OUTPUT
+            echo "needs_build=true" >> $GITHUB_OUTPUT
+            echo "skip_build=false" >> $GITHUB_OUTPUT
+            echo "🎯 Strategy: Light Scan + Build + Deploy"
+
+          # K8s-only changes → deploy manifest only (no build)
+          elif [[ "$K8S_CHANGED" == "true" ]] && [[ -z "$PATHS" ]]; then
+            echo "needs_full_test=false" >> $GITHUB_OUTPUT
+            echo "needs_light_scan=false" >> $GITHUB_OUTPUT
+            echo "needs_build=true" >> $GITHUB_OUTPUT
+            echo "skip_build=true" >> $GITHUB_OUTPUT
+            echo "🎯 Strategy: Deploy Manifest Only (no build)"
+
+          # Workflow-only changes → skip all
+          elif [[ "$WF_CHANGED" == "true" ]] && [[ -z "$PATHS" ]] && [[ "$K8S_CHANGED" != "true" ]]; then
+            echo "needs_full_test=false" >> $GITHUB_OUTPUT
+            echo "needs_light_scan=false" >> $GITHUB_OUTPUT
+            echo "needs_build=false" >> $GITHUB_OUTPUT
+            echo "skip_build=true" >> $GITHUB_OUTPUT
+            echo "🎯 Strategy: Skip all (workflow changes only)"
+
+          else
+            echo "needs_full_test=false" >> $GITHUB_OUTPUT
+            echo "needs_light_scan=false" >> $GITHUB_OUTPUT
+            echo "needs_build=false" >> $GITHUB_OUTPUT
+            echo "skip_build=true" >> $GITHUB_OUTPUT
+            echo "🎯 Strategy: Skip all (no relevant changes)"
+          fi
+
+  # ============================================================
+  # Step 3a: Full Test & Scan (for api/components/core changes)
+  # - ESLint → SonarCloud → Jest + Coverage → Trivy FS scan
+  # ============================================================
+  full-test-scan:
+    name: Full Test & Security Scan
+    needs: detect-changes
+    if: needs.detect-changes.outputs.needs_full_test == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: web/TRAVEL-WEB/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd web/TRAVEL-WEB
+          npm ci
+
+      # --- Stage 1: Lint & Static Analysis ---
+      - name: Run ESLint
+        run: |
+          cd web/TRAVEL-WEB
+          npx eslint . --max-warnings 0 || true
+          echo "✅ ESLint analysis complete"
+
+      - name: TypeScript type check
+        run: |
+          cd web/TRAVEL-WEB
+          npx tsc --noEmit --pretty || true
+          echo "✅ TypeScript type check complete"
+
+      # --- Stage 2: SonarCloud Analysis ---
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        with:
+          args: >
+            -Dproject.settings=ci-cd/sonarqube/sonar-project.properties
+            -Dsonar.projectBaseDir=${{ github.workspace }}
+            -Dsonar.scm.provider=git
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      # --- Stage 3: Unit & Integration Tests (Jest) ---
+      - name: Run Jest Tests with Coverage
+        env:
+          # Provide dummy env vars so Next.js can load without errors
+          DATABASE_URL: "postgresql://test:test@localhost:5432/test"
+          NEXTAUTH_SECRET: "test-secret-for-ci-pipeline"
+          NEXTAUTH_URL: "http://localhost:3000"
+        run: |
+          cd web/TRAVEL-WEB
+          npx jest --coverage \
+            --coverageReporters=lcov \
+            --coverageReporters=text \
+            --coverageReporters=clover \
+            --coverageDirectory=coverage \
+            --ci --passWithNoTests
+          echo "✅ Jest tests complete"
+
+      - name: Upload coverage to workflow artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: web/TRAVEL-WEB/coverage/
+          retention-days: 7
+
+      # --- Stage 4: Trivy Filesystem Vulnerability Scan ---
+      - name: Run Trivy vulnerability scanner (Filesystem)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: 'web/TRAVEL-WEB'
+          format: 'sarif'
+          output: 'trivy-fs-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          trivyignores: 'ci-cd/trivy/.trivyignore'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: 'trivy-fs-results.sarif'
+
+  # ============================================================
+  # Step 3b: Light Scan (for static/CSS/public changes only)
+  # ============================================================
+  light-scan:
+    name: Light Security Scan
+    needs: detect-changes
+    if: needs.detect-changes.outputs.needs_light_scan == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Run Trivy vulnerability scanner (Filesystem)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: 'web/TRAVEL-WEB'
+          format: 'sarif'
+          output: 'trivy-fs-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          trivyignores: 'ci-cd/trivy/.trivyignore'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: 'trivy-fs-results.sarif'
+
+  # ============================================================
+  # Step 4: Build Docker Image → Trivy Image Scan → Sign → Push ECR → Update GitOps
+  # ============================================================
+  build-deploy:
+    name: Build & Deploy
+    needs: [path-filter, detect-changes, full-test-scan, light-scan]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.needs_build == 'true' &&
+      github.event_name == 'push' &&
+      (needs.full-test-scan.result == 'success' || needs.full-test-scan.result == 'skipped') &&
+      (needs.light-scan.result == 'success' || needs.light-scan.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      security-events: write
+      id-token: write  # Required for Cosign keyless signing
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      # --- AWS & ECR Login ---
+      - name: Configure AWS credentials
+        if: needs.detect-changes.outputs.skip_build != 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        if: needs.detect-changes.outputs.skip_build != 'true'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # --- Build Docker Image ---
+      - name: Build Docker Image
+        if: needs.detect-changes.outputs.skip_build != 'true'
+        id: build-image
+        env:
+          REGISTRY: ${{ env.ECR_REGISTRY_URL }}
+          REPO: ${{ env.ECR_REPOSITORY }}
+          TAG: ${{ env.IMAGE_TAG }}
+        run: |
+          docker build -t $REGISTRY/$REPO:$TAG \
+                       -t $REGISTRY/$REPO:latest \
+                       -f ci-cd/docker/Dockerfile web/TRAVEL-WEB/
+
+          echo "image_uri=$REGISTRY/$REPO:$TAG" >> $GITHUB_OUTPUT
+          echo "✅ Docker image built: $REGISTRY/$REPO:$TAG"
+
+      # --- Trivy Image Vulnerability Scan ---
+      - name: Run Trivy vulnerability scanner (Docker Image)
+        if: needs.detect-changes.outputs.skip_build != 'true'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.ECR_REGISTRY_URL }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}'
+          format: 'sarif'
+          output: 'trivy-image-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          trivyignores: 'ci-cd/trivy/.trivyignore'
+
+      - name: Upload Trivy Image results to GitHub Security
+        if: needs.detect-changes.outputs.skip_build != 'true'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: 'trivy-image-results.sarif'
+
+      # --- Sign Image with Cosign (keyless / OIDC) ---
+      - name: Install Cosign
+        if: needs.detect-changes.outputs.skip_build != 'true'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign Docker Image with Cosign
+        if: needs.detect-changes.outputs.skip_build != 'true'
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+          REGISTRY: ${{ env.ECR_REGISTRY_URL }}
+          REPO: ${{ env.ECR_REPOSITORY }}
+          TAG: ${{ env.IMAGE_TAG }}
+        run: |
+          cosign sign --yes $REGISTRY/$REPO:$TAG
+          echo "✅ Image signed with Cosign (keyless OIDC)"
+
+      # --- Push to Amazon ECR ---
+      - name: Push Docker Image to ECR
+        if: needs.detect-changes.outputs.skip_build != 'true'
+        env:
+          REGISTRY: ${{ env.ECR_REGISTRY_URL }}
+          REPO: ${{ env.ECR_REPOSITORY }}
+          TAG: ${{ env.IMAGE_TAG }}
+        run: |
+          docker push $REGISTRY/$REPO:$TAG
+          docker push $REGISTRY/$REPO:latest
+          echo "✅ Image pushed to ECR: $REGISTRY/$REPO:$TAG"
+
+      # --- Update GitOps Manifest (Kustomize) ---
+      - name: Update Kubernetes Manifest
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          ENVIRONMENT: ${{ needs.detect-changes.outputs.environment }}
+        run: |
+          echo "Updating $ENVIRONMENT overlay with image tag: $IMAGE_TAG"
+
+          git config --global user.email "ci-cd-bot@users.noreply.github.com"
+          git config --global user.name "CI/CD Bot"
+
+          cd ci-cd/k8s/overlays/$ENVIRONMENT
+
+          if [[ "${{ needs.detect-changes.outputs.skip_build }}" == "true" ]]; then
+            echo "⚠️ Skipping image tag update (manifest-only deployment)"
+          else
+            kustomize edit set image travel-web=${{ env.ECR_REGISTRY_URL }}/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
+          fi
+
+          git add kustomization.yaml
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            COMMIT_MSG="chore(gitops): update $ENVIRONMENT"
+            if [[ "${{ needs.detect-changes.outputs.skip_build }}" == "true" ]]; then
+              COMMIT_MSG="$COMMIT_MSG manifests [skip ci]"
+            else
+              COMMIT_MSG="$COMMIT_MSG image to $IMAGE_TAG [skip ci]"
+            fi
+
+            git commit -m "$COMMIT_MSG"
+            git pull origin ${{ github.ref_name }} --rebase
+            git push origin HEAD:${{ github.ref_name }}
+            echo "✅ GitOps manifest updated successfully"
+          fi

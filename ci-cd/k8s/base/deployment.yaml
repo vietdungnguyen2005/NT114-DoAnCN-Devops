@@ -1,0 +1,100 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: travel-web
+  labels:
+    app: travel-web
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: travel-web
+  strategy:
+    canary:
+      steps:
+        - setWeight: 20
+        - pause: { duration: 30s }
+        - setWeight: 40
+        - pause: { duration: 30s }
+        - setWeight: 60
+        - pause: { duration: 30s }
+        - setWeight: 80
+        - pause: { duration: 30s }
+      canaryService: travel-web-canary
+      stableService: travel-web-stable
+      trafficRouting:
+        traefik:
+          weightedTraefikServiceName: travel-web-weighted
+  template:
+    metadata:
+      labels:
+        app: travel-web
+    spec:
+      containers:
+        - name: travel-web
+          image: travel-web-app
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+
+          env:
+            # Secrets from AWS Secrets Manager (via External Secrets Operator)
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: DATABASE_URL
+            - name: NEXTAUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: NEXTAUTH_SECRET
+            - name: STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: STRIPE_SECRET_KEY
+
+            # Plain-text environment variables
+            - name: NEXTAUTH_URL
+              value: "https://travel-web.example.com"
+            - name: NEXT_PUBLIC_APP_URL
+              value: "https://travel-web.example.com"
+            - name: NODE_ENV
+              value: "production"
+
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 30

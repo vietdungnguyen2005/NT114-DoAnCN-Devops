@@ -1,0 +1,224 @@
+# =============================================================================
+# Docker Compose — TRAVEL-WEB Local Development Stack
+# =============================================================================
+# Starts the full application + observability stack locally:
+#   - travel-web (Next.js on port 3000)
+#   - postgres (PostgreSQL 16 on port 5432)
+#   - prometheus (port 9090)
+#   - grafana (port 3001 — avoids clash with Next.js)
+#   - loki (port 3100)
+#   - promtail (log shipper → Loki)
+#   - cadvisor (container metrics)
+#
+# Usage:
+#   docker compose up -d
+#   docker compose down -v    # tear down with volumes
+# =============================================================================
+
+services:
+  # -------------------------------------------------------------------
+  # TRAVEL-WEB — Next.js Application
+  # -------------------------------------------------------------------
+  travel-web:
+    build:
+      context: ./web/TRAVEL-WEB
+      dockerfile: Dockerfile
+    container_name: travel-web
+    env_file:
+      - ./web/TRAVEL-WEB/.env
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-travel}:${POSTGRES_PASSWORD:-travel123}@postgres:5432/${POSTGRES_DB:-traveldb}?schema=public
+      - NEXT_TELEMETRY_DISABLED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - travel-web-network
+    labels:
+      - "app=travel-web"
+      - "component=nextjs"
+
+  # -------------------------------------------------------------------
+  # PostgreSQL — Primary Database
+  # -------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: travel-web-postgres
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-travel}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-travel123}
+      - POSTGRES_DB=${POSTGRES_DB:-traveldb}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-travel} -d ${POSTGRES_DB:-traveldb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - travel-web-network
+
+  # -------------------------------------------------------------------
+  # Prometheus — Metrics Collection and Storage
+  # -------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: travel-web-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+      - "--web.enable-remote-write-receiver"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+    networks:
+      - travel-web-network
+
+  # -------------------------------------------------------------------
+  # Grafana — Visualization and Dashboards
+  # -------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: travel-web-grafana
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:${GRAFANA_PORT:-3001}
+      - GF_INSTALL_PLUGINS=
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+    networks:
+      - travel-web-network
+
+  # -------------------------------------------------------------------
+  # Loki — Log Aggregation
+  # -------------------------------------------------------------------
+  loki:
+    image: grafana/loki:2.9.5
+    container_name: travel-web-loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    restart: unless-stopped
+    networks:
+      - travel-web-network
+
+  # -------------------------------------------------------------------
+  # Promtail — Log Shipper (sends Docker logs to Loki)
+  # -------------------------------------------------------------------
+  promtail:
+    image: grafana/promtail:2.9.5
+    container_name: travel-web-promtail
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    configs:
+      - source: promtail-config
+        target: /etc/promtail/config.yml
+    depends_on:
+      - loki
+    restart: unless-stopped
+    networks:
+      - travel-web-network
+
+  # -------------------------------------------------------------------
+  # cAdvisor — Container Metrics Exporter
+  # -------------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: travel-web-cadvisor
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    devices:
+      - /dev/kmsg
+    restart: unless-stopped
+    networks:
+      - travel-web-network
+
+# -------------------------------------------------------------------
+# Promtail Config (inline)
+# -------------------------------------------------------------------
+configs:
+  promtail-config:
+    content: |
+      server:
+        http_listen_port: 9080
+        grpc_listen_port: 0
+
+      positions:
+        filename: /tmp/positions.yaml
+
+      clients:
+        - url: http://loki:3100/loki/api/v1/push
+
+      scrape_configs:
+        - job_name: docker
+          docker_sd_configs:
+            - host: unix:///var/run/docker.sock
+              refresh_interval: 5s
+              filters:
+                - name: label
+                  values: ["app=travel-web"]
+          relabel_configs:
+            - source_labels: ['__meta_docker_container_name']
+              regex: '/(.*)'
+              target_label: 'container'
+            - source_labels: ['__meta_docker_container_label_app']
+              target_label: 'app'
+            - source_labels: ['__meta_docker_container_label_component']
+              target_label: 'component'
+
+networks:
+  travel-web-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  loki-data:
+    driver: local

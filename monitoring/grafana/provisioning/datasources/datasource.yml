@@ -1,0 +1,42 @@
+# =============================================================================
+# Grafana Datasource Provisioning — TRAVEL-WEB
+# =============================================================================
+# Auto-provisions Prometheus (metrics) and Loki (logs) datasources on startup.
+# =============================================================================
+
+apiVersion: 1
+
+datasources:
+  # -------------------------------------------------------------------
+  # Prometheus — primary metrics store (default)
+  # -------------------------------------------------------------------
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: "15s"
+      httpMethod: POST
+      exemplarTraceIdDestinations:
+        - name: traceID
+          datasourceUid: loki
+    version: 1
+
+  # -------------------------------------------------------------------
+  # Loki — log aggregation
+  # -------------------------------------------------------------------
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: true
+    jsonData:
+      maxLines: 1000
+      derivedFields:
+        - datasourceUid: prometheus
+          matcherRegex: '"traceId":"(\w+)"'
+          name: TraceID
+          url: "$${__value.raw}"
+    version: 1

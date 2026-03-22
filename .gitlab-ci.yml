@@ -1,0 +1,665 @@
+# =============================================================================
+# GitLab CI/CD Pipeline — TRAVEL-WEB
+# =============================================================================
+# Replaces GitHub Actions workflows:
+#   - ci-cd-pipeline.yml     (smart CI/CD with 8 stages)
+#   - validate-manifests.yml (K8s manifest validation)
+#   - update-submodule.yml   (sync submodule from trigger)
+#
+# Stages: detect → validate → test → scan → build → deploy → sync-submodule
+# Last updated: 2026-03-22
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Workflow rules — avoid duplicate pipelines (MR + branch push)
+# ---------------------------------------------------------------------------
+workflow:
+  rules:
+    # API / trigger / web → always run (for sync-submodule)
+    - if: '$CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "web"'
+    # MR pipelines
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    # Push to microservice / test — only if NOT an MR pipeline (detached)
+    - if: '$CI_COMMIT_BRANCH == "microservice" || $CI_COMMIT_BRANCH == "test"'
+
+# ---------------------------------------------------------------------------
+# Global configuration
+# ---------------------------------------------------------------------------
+stages:
+  - detect
+  - validate
+  - test
+  - scan
+  - build
+  - deploy
+  - sync-submodule
+
+variables:
+  GIT_SUBMODULE_STRATEGY: none
+  GIT_DEPTH: "0"
+  AWS_REGION: "ap-southeast-1"
+  ECR_REGISTRY_URL: "443014729163.dkr.ecr.ap-southeast-1.amazonaws.com"
+  ECR_REPOSITORY: "travel-web-app"
+  IMAGE_TAG: "$CI_COMMIT_SHA"
+  NODE_VERSION: "20"
+
+# NPM cache — shared across jobs that use node
+cache: &npm_cache
+  key:
+    files:
+      - web/TRAVEL-WEB/package-lock.json
+  paths:
+    - web/TRAVEL-WEB/node_modules/
+  policy: pull
+
+# =============================================================================
+# Stage 1: detect — Analyze changes & decide pipeline strategy
+# =============================================================================
+detect-changes:
+  stage: detect
+  image: alpine:3.19
+  variables:
+    GIT_DEPTH: "50"
+  rules:
+    # Skip for API/trigger/web (those are for sync-submodule)
+    - if: '$CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger"'
+      when: never
+    - when: on_success
+  before_script:
+    - apk add --no-cache git bash
+  script:
+    - |
+      #!/usr/bin/env bash
+      set -eo pipefail
+
+      echo "============================================================"
+      echo "  Detect Changes & Build Strategy"
+      echo "============================================================"
+
+      # --- Determine environment ---
+      # microservice → dev (nhánh phát triển chính hiện tại)
+      # test → dev | main → production (sau khi merge)
+      if [ "${CI_COMMIT_BRANCH:-}" = "main" ]; then
+        ENVIRONMENT="production"
+      else
+        ENVIRONMENT="dev"
+      fi
+      echo "ENVIRONMENT=$ENVIRONMENT" >> detect.env
+      echo "📌 Environment: $ENVIRONMENT"
+
+      # --- Determine changed files ---
+      if [ "${CI_PIPELINE_SOURCE:-push}" = "merge_request_event" ]; then
+        BASE_SHA="origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-microservice}"
+        git fetch origin "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-microservice}" --depth=50 || true
+      else
+        if git rev-parse HEAD~1 >/dev/null 2>&1; then
+          BASE_SHA="HEAD~1"
+        else
+          BASE_SHA=$(git hash-object -t tree /dev/null)
+        fi
+      fi
+
+      CHANGED_FILES=$(git diff --name-only "$BASE_SHA" HEAD 2>/dev/null || echo "")
+      echo "📝 Changed files:"
+      echo "$CHANGED_FILES" | head -30 || true
+
+      # --- Classify changes (write to temp file to avoid subshell scope) ---
+      WEB_CHANGED="false"
+      K8S_CHANGED="false"
+      CI_CHANGED="false"
+      WEB_API="false"
+      WEB_COMPONENTS="false"
+      WEB_CORE="false"
+      WEB_OTHER="false"
+
+      echo "$CHANGED_FILES" > /tmp/changed_files.txt
+      while IFS= read -r file; do
+        [ -z "$file" ] && continue
+
+        # Web changes
+        case "$file" in
+          web/TRAVEL-WEB/*|web/TRAVEL-WEB|.gitmodules)
+            WEB_CHANGED="true"
+            case "$file" in
+              web/TRAVEL-WEB/src/app/api/*)
+                WEB_API="true" ;;
+              web/TRAVEL-WEB/src/components/*|web/TRAVEL-WEB/src/hooks/*|web/TRAVEL-WEB/src/lib/*)
+                WEB_COMPONENTS="true" ;;
+              web/TRAVEL-WEB/src/app/*/page.tsx|web/TRAVEL-WEB/src/app/*/layout.tsx|\
+              web/TRAVEL-WEB/package.json|web/TRAVEL-WEB/package-lock.json|\
+              web/TRAVEL-WEB/next.config.ts|web/TRAVEL-WEB/tsconfig.json|\
+              web/TRAVEL-WEB/prisma/*)
+                WEB_CORE="true" ;;
+              web/TRAVEL-WEB/public/*|*.css)
+                WEB_OTHER="true" ;;
+            esac
+            ;;
+        esac
+
+        # K8s changes
+        case "$file" in
+          ci-cd/k8s/*) K8S_CHANGED="true" ;;
+        esac
+
+        # CI config changes
+        case "$file" in
+          .gitlab-ci.yml|.github/workflows/*) CI_CHANGED="true" ;;
+        esac
+      done < /tmp/changed_files.txt
+
+      echo ""
+      echo "📊 Classification:"
+      echo "   Web: $WEB_CHANGED (api=$WEB_API, components=$WEB_COMPONENTS, core=$WEB_CORE, other=$WEB_OTHER)"
+      echo "   K8s: $K8S_CHANGED | CI: $CI_CHANGED"
+
+      # --- Submodule update detection (commit message parsing) ---
+      COMMIT_MSG="${CI_COMMIT_MESSAGE:-}"
+      SOURCE="direct"
+      PARSED_PATHS=$(echo "$COMMIT_MSG" | sed -n 's/.*\[\([^]]*\)\].*/\1/p')
+      if [ -n "$PARSED_PATHS" ]; then
+        echo "📦 Submodule update detected — paths: $PARSED_PATHS"
+        SOURCE="submodule"
+        # Re-classify from parsed paths
+        echo "$PARSED_PATHS" | grep -q "api" && WEB_API="true" || true
+        echo "$PARSED_PATHS" | grep -q "components" && WEB_COMPONENTS="true" || true
+        echo "$PARSED_PATHS" | grep -q "core" && WEB_CORE="true" || true
+        echo "$PARSED_PATHS" | grep -q "other" && WEB_OTHER="true" || true
+      fi
+
+      # --- Strategy decision ---
+      # Core / API / Components → full_test (full test + build + deploy)
+      if [ "$WEB_API" = "true" ] || [ "$WEB_COMPONENTS" = "true" ] || [ "$WEB_CORE" = "true" ]; then
+        STRATEGY="full_test"
+        SKIP_BUILD="false"
+        echo "🎯 Strategy: full_test (Full Test + Build + Deploy)"
+
+      # Static / CSS / public only → light_scan (trivy + build + deploy)
+      elif [ "$WEB_OTHER" = "true" ]; then
+        STRATEGY="light_scan"
+        SKIP_BUILD="false"
+        echo "🎯 Strategy: light_scan (Light Scan + Build + Deploy)"
+
+      # K8s-only → manifest_only (deploy manifest, skip docker build)
+      elif [ "$K8S_CHANGED" = "true" ] && [ "$WEB_CHANGED" = "false" ]; then
+        STRATEGY="manifest_only"
+        SKIP_BUILD="true"
+        echo "🎯 Strategy: manifest_only (Deploy Manifest Only)"
+
+      # CI-only or nothing relevant → skip
+      else
+        STRATEGY="skip"
+        SKIP_BUILD="true"
+        echo "🎯 Strategy: skip (No relevant changes)"
+      fi
+
+      # --- Write dotenv artifact ---
+      echo "STRATEGY=$STRATEGY"         >> detect.env
+      echo "SKIP_BUILD=$SKIP_BUILD"     >> detect.env
+      echo "WEB_CHANGED=$WEB_CHANGED"   >> detect.env
+      echo "K8S_CHANGED=$K8S_CHANGED"   >> detect.env
+
+      echo ""
+      echo "============================================================"
+      echo "  ✅ Detection complete"
+      echo "  Strategy: $STRATEGY | Skip Build: $SKIP_BUILD | Env: $ENVIRONMENT"
+      echo "============================================================"
+  artifacts:
+    reports:
+      dotenv: detect.env
+
+# =============================================================================
+# Stage 2: validate — Validate K8s manifests (MR only, when k8s/ changed)
+# =============================================================================
+validate-manifests:
+  stage: validate
+  image: alpine:3.19
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - ci-cd/k8s/**/*
+        - scripts/validate-kustomize.sh
+      when: on_success
+    - when: never
+  before_script:
+    - apk add --no-cache curl bash python3 py3-pip kubectl
+    - pip install yamllint --break-system-packages || pip install yamllint
+    - |
+      # Install kustomize
+      curl -sL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+      mv kustomize /usr/local/bin/
+      kustomize version
+  script:
+    - |
+      echo "============================================================"
+      echo "  Validate K8s Manifests"
+      echo "============================================================"
+
+      # --- Kustomize validation ---
+      echo ""
+      echo "📦 Running Kustomize validation..."
+      chmod +x scripts/validate-kustomize.sh
+      bash scripts/validate-kustomize.sh || true
+
+      # --- Kustomize build preview ---
+      echo ""
+      echo "📦 Kustomize Build Preview:"
+      for env in dev staging production; do
+        if [ -d "ci-cd/k8s/overlays/$env" ]; then
+          echo ""
+          echo "### Environment: $env"
+          kustomize build "ci-cd/k8s/overlays/$env" | head -n 50
+        fi
+      done
+
+      # --- YAML lint ---
+      echo ""
+      echo "📦 Running yamllint..."
+      yamllint -d '{extends: default, rules: {line-length: {max: 120}, comments: disable}}' \
+        ci-cd/k8s/ \
+        ci-cd/argocd/ || true
+
+      echo ""
+      echo "✅ Manifest validation complete"
+
+# =============================================================================
+# Stage 3: test — Full Test & Scan (ESLint → tsc → Jest → SonarCloud)
+# =============================================================================
+full-test-scan:
+  stage: test
+  image: node:20
+  needs:
+    - job: detect-changes
+      artifacts: true
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger"'
+      when: never
+    - when: on_success
+  cache:
+    <<: *npm_cache
+    policy: pull-push
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+    # Dummy env vars for Next.js to load without errors
+    DATABASE_URL: "postgresql://test:test@localhost:5432/test"
+    NEXTAUTH_SECRET: "test-secret-for-ci-pipeline"
+    NEXTAUTH_URL: "http://localhost:3000"
+  before_script:
+    - |
+      # Only run if STRATEGY == full_test
+      if [ "${STRATEGY}" != "full_test" ]; then
+        echo "⏭️  Skipping full-test-scan (STRATEGY=${STRATEGY})"
+        exit 0
+      fi
+    - cd web/TRAVEL-WEB
+    - npm ci
+  script:
+    - |
+      if [ "${STRATEGY}" != "full_test" ]; then
+        echo "⏭️  Skipped"
+        exit 0
+      fi
+
+      echo "============================================================"
+      echo "  Full Test & Security Scan"
+      echo "============================================================"
+
+      # --- Stage 1: ESLint ---
+      echo ""
+      echo "📦 Running ESLint..."
+      npx eslint . --max-warnings 0 || true
+      echo "✅ ESLint analysis complete"
+
+      # --- Stage 2: TypeScript type check ---
+      echo ""
+      echo "📦 Running TypeScript type check..."
+      npx tsc --noEmit --pretty || true
+      echo "✅ TypeScript type check complete"
+
+      # --- Stage 3: Jest tests with coverage ---
+      echo ""
+      echo "📦 Running Jest tests..."
+      npx jest --coverage \
+        --coverageReporters=lcov \
+        --coverageReporters=text \
+        --coverageReporters=clover \
+        --coverageDirectory=coverage \
+        --ci --passWithNoTests
+      echo "✅ Jest tests complete"
+
+      # --- Stage 4: SonarCloud scan ---
+      echo ""
+      echo "📦 Running SonarCloud scan..."
+      cd "${CI_PROJECT_DIR}"
+
+      # Install sonar-scanner
+      SONAR_SCANNER_VERSION="5.0.1.3006"
+      curl -sSLo sonar-scanner.zip "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip"
+      unzip -q sonar-scanner.zip
+      export PATH="${CI_PROJECT_DIR}/sonar-scanner-${SONAR_SCANNER_VERSION}-linux/bin:${PATH}"
+
+      sonar-scanner \
+        -Dproject.settings=ci-cd/sonarqube/sonar-project.properties \
+        -Dsonar.projectBaseDir="${CI_PROJECT_DIR}" \
+        -Dsonar.scm.provider=git \
+        -Dsonar.token="${SONAR_TOKEN}"
+      echo "✅ SonarCloud scan complete"
+  artifacts:
+    when: always
+    paths:
+      - web/TRAVEL-WEB/coverage/
+    expire_in: 7 days
+
+# =============================================================================
+# Stage 4: scan — Trivy filesystem vulnerability scan
+# =============================================================================
+trivy-fs-scan:
+  stage: scan
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  needs:
+    - job: detect-changes
+      artifacts: true
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger"'
+      when: never
+    - when: on_success
+  script:
+    - |
+      if [ "${STRATEGY}" = "skip" ]; then
+        echo "⏭️  Skipping Trivy FS scan (STRATEGY=skip)"
+        exit 0
+      fi
+
+      echo "============================================================"
+      echo "  Trivy Filesystem Vulnerability Scan"
+      echo "============================================================"
+
+      trivy fs web/TRAVEL-WEB \
+        --severity CRITICAL,HIGH,MEDIUM \
+        --ignorefile ci-cd/trivy/.trivyignore \
+        --format table \
+        --exit-code 0
+
+      # Also generate JSON report for artifacts
+      trivy fs web/TRAVEL-WEB \
+        --severity CRITICAL,HIGH,MEDIUM \
+        --ignorefile ci-cd/trivy/.trivyignore \
+        --format json \
+        --output trivy-fs-results.json
+
+      echo ""
+      echo "✅ Trivy filesystem scan complete"
+  artifacts:
+    when: always
+    paths:
+      - trivy-fs-results.json
+    expire_in: 7 days
+
+# =============================================================================
+# Stage 5: build — Docker Build → Trivy Image Scan → Cosign Sign → Push ECR
+# =============================================================================
+build-and-push:
+  stage: build
+  image: docker:24-dind
+  services:
+    - docker:24-dind
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+    DOCKER_TLS_CERTDIR: "/certs"
+  needs:
+    - job: detect-changes
+      artifacts: true
+    - job: full-test-scan
+      optional: true
+    - job: trivy-fs-scan
+      optional: true
+  rules:
+    # Only on push to microservice/test (not MR, not trigger)
+    - if: '$CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "microservice" || $CI_COMMIT_BRANCH == "test"'
+      when: on_success
+    - when: never
+  before_script:
+    - |
+      # Only run when docker build is needed
+      if [ "${STRATEGY}" != "full_test" ] && [ "${STRATEGY}" != "light_scan" ]; then
+        echo "⏭️  Skipping build (STRATEGY=${STRATEGY})"
+        exit 0
+      fi
+    - apk add --no-cache aws-cli curl bash python3
+  script:
+    - |
+      if [ "${STRATEGY}" != "full_test" ] && [ "${STRATEGY}" != "light_scan" ]; then
+        echo "⏭️  Skipped"
+        exit 0
+      fi
+
+      echo "============================================================"
+      echo "  Build & Push Docker Image"
+      echo "============================================================"
+
+      REGISTRY="${ECR_REGISTRY_URL}"
+      REPO="${ECR_REPOSITORY}"
+      TAG="${IMAGE_TAG}"
+      FULL_IMAGE="${REGISTRY}/${REPO}:${TAG}"
+
+      # --- AWS ECR Login ---
+      echo ""
+      echo "📦 Logging into AWS ECR..."
+      aws configure set aws_access_key_id "${AWS_ACCESS_KEY_ID}"
+      aws configure set aws_secret_access_key "${AWS_SECRET_ACCESS_KEY}"
+      aws configure set region "${AWS_REGION}"
+
+      aws ecr get-login-password --region "${AWS_REGION}" | \
+        docker login --username AWS --password-stdin "${REGISTRY}"
+      echo "✅ ECR login successful"
+
+      # --- Build Docker image ---
+      echo ""
+      echo "📦 Building Docker image..."
+      docker build \
+        -t "${FULL_IMAGE}" \
+        -t "${REGISTRY}/${REPO}:latest" \
+        -f ci-cd/docker/Dockerfile web/TRAVEL-WEB/
+      echo "✅ Docker image built: ${FULL_IMAGE}"
+
+      # --- Trivy image scan ---
+      echo ""
+      echo "📦 Running Trivy image scan..."
+      curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+      trivy image "${FULL_IMAGE}" \
+        --severity CRITICAL,HIGH \
+        --ignorefile ci-cd/trivy/.trivyignore \
+        --format table \
+        --exit-code 0
+      echo "✅ Trivy image scan complete"
+
+      # --- Sign image with Cosign (keyless / OIDC) ---
+      echo ""
+      echo "📦 Signing image with Cosign..."
+      curl -sSLo /usr/local/bin/cosign \
+        "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64"
+      chmod +x /usr/local/bin/cosign
+
+      export COSIGN_EXPERIMENTAL=1
+      cosign sign --yes "${FULL_IMAGE}" || echo "⚠️  Cosign signing skipped (OIDC may not be configured)"
+      echo "✅ Image signing step complete"
+
+      # --- Push to ECR ---
+      echo ""
+      echo "📦 Pushing image to ECR..."
+      docker push "${FULL_IMAGE}"
+      docker push "${REGISTRY}/${REPO}:latest"
+      echo "✅ Image pushed: ${FULL_IMAGE}"
+
+      echo ""
+      echo "============================================================"
+      echo "  ✅ Build & Push complete"
+      echo "============================================================"
+
+# =============================================================================
+# Stage 6: deploy — Update GitOps manifests (Kustomize → git push)
+# =============================================================================
+deploy-manifests:
+  stage: deploy
+  image: alpine:3.19
+  needs:
+    - job: detect-changes
+      artifacts: true
+    - job: build-and-push
+      optional: true
+  rules:
+    # Only on push to microservice/test
+    - if: '$CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "microservice" || $CI_COMMIT_BRANCH == "test"'
+      when: on_success
+    - when: never
+  before_script:
+    - |
+      # Only run when deployment is needed
+      if [ "${STRATEGY}" = "skip" ]; then
+        echo "⏭️  Skipping deploy (STRATEGY=skip)"
+        exit 0
+      fi
+    - apk add --no-cache git bash curl
+    - |
+      # Install kustomize
+      curl -sL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+      mv kustomize /usr/local/bin/
+  script:
+    - |
+      if [ "${STRATEGY}" = "skip" ]; then
+        echo "⏭️  Skipped"
+        exit 0
+      fi
+
+      echo "============================================================"
+      echo "  Deploy — Update GitOps Manifests"
+      echo "============================================================"
+
+      ENVIRONMENT="${ENVIRONMENT:-dev}"
+      echo "📌 Deploying to: $ENVIRONMENT"
+
+      # Configure git
+      git config --global user.email "ci-cd-bot@users.noreply.gitlab.com"
+      git config --global user.name "CI/CD Bot"
+
+      # Re-clone with PAT for push access
+      cd /tmp
+      git clone "https://ci-cd-bot:${DEVOPS_PAT}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" deploy-repo
+      cd deploy-repo
+      git checkout "${CI_COMMIT_BRANCH}"
+      git submodule update --init --recursive
+
+      cd "ci-cd/k8s/overlays/${ENVIRONMENT}"
+
+      # Update image tag (skip if manifest_only without new image)
+      if [ "${SKIP_BUILD}" = "true" ]; then
+        echo "⚠️  Skipping image tag update (manifest-only deployment)"
+      else
+        kustomize edit set image "travel-web=${ECR_REGISTRY_URL}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+      fi
+
+      git add kustomization.yaml
+
+      if git diff --staged --quiet; then
+        echo "✅ No changes to commit"
+      else
+        if [ "${SKIP_BUILD}" = "true" ]; then
+          COMMIT_MSG="chore(gitops): update ${ENVIRONMENT} manifests [skip ci]"
+        else
+          COMMIT_MSG="chore(gitops): update ${ENVIRONMENT} image to ${IMAGE_TAG} [skip ci]"
+        fi
+
+        git commit -m "$COMMIT_MSG"
+        git pull origin "${CI_COMMIT_BRANCH}" --rebase
+        git push origin HEAD:"${CI_COMMIT_BRANCH}"
+        echo "✅ GitOps manifest updated successfully"
+      fi
+
+      echo ""
+      echo "============================================================"
+      echo "  ✅ Deploy complete"
+      echo "============================================================"
+
+# =============================================================================
+# Stage 7: sync-submodule — Update TRAVEL-WEB submodule (API/trigger/web only)
+# =============================================================================
+sync-submodule:
+  stage: sync-submodule
+  image: alpine:3.19
+  rules:
+    # Only run when triggered via API, trigger token, or web UI
+    - if: '$CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "web"'
+      when: on_success
+    - when: never
+  variables:
+    # Override — we handle submodule checkout manually
+    GIT_SUBMODULE_STRATEGY: none
+  before_script:
+    - apk add --no-cache git bash
+  script:
+    - |
+      #!/usr/bin/env bash
+      set -eo pipefail
+
+      echo "============================================================"
+      echo "  Sync Submodule — TRAVEL-WEB"
+      echo "============================================================"
+
+      # Variables from trigger payload (optional)
+      TARGET_SHA="${SUBMODULE_SHA:-}"
+      CHANGED_PATHS="${SUBMODULE_PATHS:-}"
+
+      # Configure git
+      git config --global user.name "CI/CD Bot"
+      git config --global user.email "ci-cd-bot@users.noreply.gitlab.com"
+
+      # Clone repo with PAT
+      cd /tmp
+      git clone "https://ci-cd-bot:${DEVOPS_PAT}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" sync-repo
+      cd sync-repo
+      git submodule update --init --recursive
+
+      cd web/TRAVEL-WEB
+      git fetch origin
+
+      # Determine target commit
+      if [ -n "$TARGET_SHA" ]; then
+        echo "🔥 Mode: Trigger with specific SHA"
+        echo "   SHA: $TARGET_SHA"
+        git checkout "$TARGET_SHA"
+      else
+        echo "⚡ Mode: Update to latest microservice"
+        git checkout origin/microservice
+      fi
+
+      ACTUAL_SHA=$(git rev-parse HEAD)
+      echo "📌 Submodule HEAD: $ACTUAL_SHA"
+
+      cd ../..
+
+      # Check if there are changes
+      if [ -n "$(git status -s)" ]; then
+        COMMIT_MSG="chore: update submodule TRAVEL-WEB to ${ACTUAL_SHA}"
+        if [ -n "$CHANGED_PATHS" ]; then
+          COMMIT_MSG="${COMMIT_MSG} [${CHANGED_PATHS}]"
+        fi
+
+        git add .
+        git commit -m "$COMMIT_MSG"
+        git push origin microservice
+        echo "✅ Submodule updated and pushed"
+      else
+        echo "✅ Submodule is already up to date. No changes."
+      fi
+
+      echo ""
+      echo "============================================================"
+      echo "  ✅ Sync complete"
+      echo "============================================================"

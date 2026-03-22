@@ -1,0 +1,70 @@
+# Stable service - receives production traffic
+apiVersion: v1
+kind: Service
+metadata:
+  name: travel-web-stable
+  labels:
+    app: travel-web
+spec:
+  selector:
+    app: travel-web
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3000
+  type: ClusterIP
+
+---
+# Canary service - receives canary traffic during rollouts
+apiVersion: v1
+kind: Service
+metadata:
+  name: travel-web-canary
+  labels:
+    app: travel-web
+spec:
+  selector:
+    app: travel-web
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3000
+  type: ClusterIP
+
+---
+# Traefik weighted service for canary traffic splitting
+apiVersion: traefik.io/v1alpha1
+kind: TraefikService
+metadata:
+  name: travel-web-weighted
+  labels:
+    app: travel-web
+spec:
+  weighted:
+    services:
+      - name: travel-web-stable
+        port: 80
+        weight: 100
+      - name: travel-web-canary
+        port: 80
+        weight: 0
+
+---
+# Traefik IngressRoute to expose the application
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: travel-web-ingress
+  labels:
+    app: travel-web
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`travel-web.example.com`)
+      kind: Rule
+      services:
+        - name: travel-web-weighted
+          kind: TraefikService
+  tls:
+    certResolver: letsencrypt

@@ -1,0 +1,48 @@
+# ============================================================================
+# terraform.tfvars.example — Template biến cấu hình cho TRAVEL-WEB
+# ============================================================================
+# Copy file này thành terraform.tfvars rồi điền giá trị:
+#   cp terraform.tfvars.example terraform.tfvars
+# ============================================================================
+
+# --- General ---
+aws_region = "ap-southeast-1"
+name       = "travel-web"
+
+# --- VPC ---
+vpc_cidr = "10.0.0.0/16"
+az_count = 2 # EKS yêu cầu tối thiểu 2
+
+# --- EKS ---
+kubernetes_version = "1.30"
+node_instance_type = "t3.medium" # t3.medium (2vCPU/4GB) hoặc t3.large (2vCPU/8GB)
+node_capacity_type = "ON_DEMAND" # ON_DEMAND hoặc SPOT (tiết kiệm ~70%)
+node_min_size      = 1
+node_max_size      = 3
+node_desired_size  = 1
+
+# --- RDS PostgreSQL ---
+rds_engine_version    = "16.4"
+rds_instance_class    = "db.t4g.micro" # Free-tier eligible
+rds_allocated_storage = 20             # GB
+rds_db_name           = "travelweb"
+rds_username          = "travelweb_admin"
+# rds_password        = "YOUR_SECURE_PASSWORD_HERE"  # ← Điền password hoặc dùng -var khi apply
+
+# --- ArgoCD ---
+argocd_app_name      = "travel-web"
+argocd_repo_url      = "https://github.com/my-org/travel-web-manifests.git"
+argocd_repo_revision = "main"
+argocd_repo_path     = "environments/dev"
+
+# --- Traefik ---
+traefik_chart_version = "28.3.0"
+
+# --- Secrets Manager ---
+secrets_recovery_window = 7 # Số ngày trước khi xóa vĩnh viễn (0 = xóa ngay)
+
+# Dev settings (tắt protection để dễ destroy)
+rds_deletion_protection = false
+rds_skip_final_snapshot = true
+ecr_force_delete        = true
+s3_force_destroy        = true

@@ -1,0 +1,63 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: travel-web-production
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    environment: production
+    app: travel-web
+  annotations:
+    # Notification on sync and rollout events
+    notifications.argoproj.io/subscribe.on-sync-succeeded.slack: travel-web-alerts
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: travel-web-alerts
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: travel-web-alerts
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/vietdungnguyen2005/NT114-DoAnCN-Devops.git
+    targetRevision: main  # Production tracks main branch only
+    path: ci-cd/k8s/overlays/production
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: travel-web-production
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - PrunePropagationPolicy=foreground
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+
+  revisionHistoryLimit: 15
+
+  # Production-specific safeguards
+  ignoreDifferences:
+    - group: argoproj.io
+      kind: Rollout
+      jsonPointers:
+        - /spec/replicas  # Allow HPA to manage replica count
+
+  # Canary rollout metadata for Argo Rollouts integration
+  # The Rollout resource in the overlay defines:
+  #   - 20% -> 40% -> 60% -> 80% -> 100% canary steps
+  #   - Automatic analysis between steps
+  #   - Traefik traffic routing for weighted canary
+  info:
+    - name: rolloutStrategy
+      value: "canary"
+    - name: canarySteps
+      value: "20% -> 40% -> 60% -> 80% -> 100%"
