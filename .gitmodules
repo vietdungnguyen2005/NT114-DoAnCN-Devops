@@ -1,3 +1,4 @@
 [submodule "web/TRAVEL-WEB"]
 	path = web/TRAVEL-WEB
-	url = https://gitlab.com/vietdungnguyen2005/TRAVEL-WEB.git        branch = microservice
+	url = https://gitlab.com/vietdungnguyen2005/TRAVEL-WEB.git
+	branch = microservice
