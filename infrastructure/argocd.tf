@@ -63,6 +63,12 @@ resource "helm_release" "argocd" {
     value = "true"
   }
 
+  # ArgoCD root path — cho phép chạy ArgoCD UI tại /argocd
+  set {
+    name  = "configs.params.server\\.rootpath"
+    value = "/argocd"
+  }
+
   # ---- HA tuỳ chọn: tắt ở dev, bật ở prod ----
   set {
     name  = "redis-ha.enabled"
@@ -163,11 +169,11 @@ resource "kubernetes_ingress_v1" "argocd" {
   spec {
     ingress_class_name = "traefik"
 
-    # Rule không có host → match tất cả traffic đến path /
+    # Rule: /argocd → ArgoCD (app dùng / riêng)
     rule {
       http {
         path {
-          path      = "/"
+          path      = "/argocd"
           path_type = "Prefix"
           backend {
             service {
