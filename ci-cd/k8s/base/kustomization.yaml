@@ -5,6 +5,7 @@ namespace: travel-web
 
 resources:
   - namespace.yaml
+  - infrastructure.yaml
   - deployment.yaml
   - service.yaml
   - ingress.yaml
@@ -14,8 +15,32 @@ resources:
   - storage-class.yaml
 
 images:
-  - name: travel-web-app
-    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-app
+  - name: api-gateway
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-api-gateway
+    newTag: latest
+  - name: auth-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-auth-service
+    newTag: latest
+  - name: booking-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-booking-service
+    newTag: latest
+  - name: room-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-room-service
+    newTag: latest
+  - name: payment-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-payment-service
+    newTag: latest
+  - name: review-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-review-service
+    newTag: latest
+  - name: notification-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-notification-service
+    newTag: latest
+  - name: content-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-content-service
+    newTag: latest
+  - name: blog-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-blog-service
     newTag: latest
 
 labels:

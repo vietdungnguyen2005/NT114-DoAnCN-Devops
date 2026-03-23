@@ -42,7 +42,7 @@ spec:
 
   # Ignore differences in replicas (allow HPA to manage scaling)
   ignoreDifferences:
-    - group: argoproj.io
-      kind: Rollout
+    - group: apps
+      kind: Deployment
       jsonPointers:
         - /spec/replicas

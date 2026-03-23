@@ -1,9 +1,15 @@
+# =============================================================
+# Database Migration Jobs — Per-service Prisma migrations
+# Runs as ArgoCD PreSync hook before deployments
+# =============================================================
+
+# --- Auth Service Migration ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: travel-web-db-migrate
+  name: auth-db-migrate
   labels:
-    app: travel-web
+    app: auth-service
     component: db-migration
   annotations:
     argocd.argoproj.io/hook: PreSync
@@ -14,25 +20,316 @@ spec:
   template:
     metadata:
       labels:
-        app: travel-web
+        app: auth-service
         component: db-migration
     spec:
       restartPolicy: Never
       containers:
         - name: migrate
-          image: travel-web-app
+          image: auth-service
           imagePullPolicy: Always
-          command:
-            - node
-            - node_modules/prisma/build/index.js
-            - migrate
-            - deploy
+          command: ["npx", "prisma", "migrate", "deploy", "--schema=./services/auth-service/prisma/schema.prisma"]
+          workingDir: /app
+          env:
+            - name: AUTH_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: AUTH_DATABASE_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+
+---
+# --- Booking Service Migration ---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: booking-db-migrate
+  labels:
+    app: booking-service
+    component: db-migration
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: booking-service
+        component: db-migration
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: booking-service
+          imagePullPolicy: Always
+          command: ["npx", "prisma", "migrate", "deploy", "--schema=./services/booking-service/prisma/schema.prisma"]
+          workingDir: /app
+          env:
+            - name: BOOKING_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: BOOKING_DATABASE_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+
+---
+# --- Room Service Migration ---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: room-db-migrate
+  labels:
+    app: room-service
+    component: db-migration
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: room-service
+        component: db-migration
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: room-service
+          imagePullPolicy: Always
+          command: ["npx", "prisma", "migrate", "deploy", "--schema=./services/room-service/prisma/schema.prisma"]
+          workingDir: /app
+          env:
+            - name: ROOM_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: ROOM_DATABASE_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+
+---
+# --- Payment Service Migration ---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: payment-db-migrate
+  labels:
+    app: payment-service
+    component: db-migration
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: payment-service
+        component: db-migration
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: payment-service
+          imagePullPolicy: Always
+          command: ["npx", "prisma", "migrate", "deploy", "--schema=./services/payment-service/prisma/schema.prisma"]
+          workingDir: /app
+          env:
+            - name: PAYMENT_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: PAYMENT_DATABASE_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+
+---
+# --- Review Service Migration ---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: review-db-migrate
+  labels:
+    app: review-service
+    component: db-migration
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: review-service
+        component: db-migration
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: review-service
+          imagePullPolicy: Always
+          command: ["npx", "prisma", "migrate", "deploy", "--schema=./services/review-service/prisma/schema.prisma"]
+          workingDir: /app
+          env:
+            - name: REVIEW_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: REVIEW_DATABASE_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+
+---
+# --- Notification Service Migration ---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: notification-db-migrate
+  labels:
+    app: notification-service
+    component: db-migration
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: notification-service
+        component: db-migration
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: notification-service
+          imagePullPolicy: Always
+          command: ["npx", "prisma", "migrate", "deploy", "--schema=./services/notification-service/prisma/schema.prisma"]
+          workingDir: /app
+          env:
+            - name: NOTIFICATION_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: NOTIFICATION_DATABASE_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+
+---
+# --- Content Service Migration ---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: content-db-migrate
+  labels:
+    app: content-service
+    component: db-migration
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: content-service
+        component: db-migration
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: content-service
+          imagePullPolicy: Always
+          command: ["npx", "prisma", "migrate", "deploy", "--schema=./services/content-service/prisma/schema.prisma"]
+          workingDir: /app
           env:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: travel-web-secrets
-                  key: DATABASE_URL
+                  key: CONTENT_DATABASE_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+
+---
+# --- Blog Service Migration ---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: blog-db-migrate
+  labels:
+    app: blog-service
+    component: db-migration
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: blog-service
+        component: db-migration
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: blog-service
+          imagePullPolicy: Always
+          command: ["npx", "prisma", "migrate", "deploy", "--schema=./services/blog-service/prisma/schema.prisma"]
+          workingDir: /app
+          env:
+            - name: BLOG_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: BLOG_DATABASE_URL
           resources:
             requests:
               cpu: 100m

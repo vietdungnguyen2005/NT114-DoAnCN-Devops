@@ -1,15 +1,147 @@
-# Main service for travel-web application
+# =============================================================
+# Services for Travel-Web Microservices
+# =============================================================
+
+# --- API Gateway (main entry point) ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: travel-web
+  name: api-gateway
   labels:
-    app: travel-web
+    app: api-gateway
 spec:
   selector:
-    app: travel-web
+    app: api-gateway
   ports:
     - protocol: TCP
-      port: 80
-      targetPort: 3000
+      port: 4000
+      targetPort: 4000
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  labels:
+    app: auth-service
+spec:
+  selector:
+    app: auth-service
+  ports:
+    - protocol: TCP
+      port: 3001
+      targetPort: 3001
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: booking-service
+  labels:
+    app: booking-service
+spec:
+  selector:
+    app: booking-service
+  ports:
+    - protocol: TCP
+      port: 3002
+      targetPort: 3002
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: room-service
+  labels:
+    app: room-service
+spec:
+  selector:
+    app: room-service
+  ports:
+    - protocol: TCP
+      port: 3003
+      targetPort: 3003
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-service
+  labels:
+    app: payment-service
+spec:
+  selector:
+    app: payment-service
+  ports:
+    - protocol: TCP
+      port: 3004
+      targetPort: 3004
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: review-service
+  labels:
+    app: review-service
+spec:
+  selector:
+    app: review-service
+  ports:
+    - protocol: TCP
+      port: 3005
+      targetPort: 3005
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+  labels:
+    app: notification-service
+spec:
+  selector:
+    app: notification-service
+  ports:
+    - protocol: TCP
+      port: 3006
+      targetPort: 3006
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: content-service
+  labels:
+    app: content-service
+spec:
+  selector:
+    app: content-service
+  ports:
+    - protocol: TCP
+      port: 3007
+      targetPort: 3007
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blog-service
+  labels:
+    app: blog-service
+spec:
+  selector:
+    app: blog-service
+  ports:
+    - protocol: TCP
+      port: 3008
+      targetPort: 3008
   type: ClusterIP

@@ -8,16 +8,109 @@ resources:
 namePrefix: prod-
 
 patches:
-  - path: patches/resources.yaml
-  - path: patches/env.yaml
+  # Production: higher resources for critical services
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api-gateway
+      spec:
+        template:
+          spec:
+            containers:
+              - name: api-gateway
+                env:
+                  - name: API_BASE_URL
+                    value: "https://travel-web.example.com"
+                resources:
+                  requests:
+                    cpu: 500m
+                    memory: 512Mi
+                  limits:
+                    cpu: "1"
+                    memory: 1Gi
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: booking-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: booking-service
+                resources:
+                  requests:
+                    cpu: 300m
+                    memory: 512Mi
+                  limits:
+                    cpu: 500m
+                    memory: 1Gi
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: payment-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: payment-service
+                resources:
+                  requests:
+                    cpu: 300m
+                    memory: 512Mi
+                  limits:
+                    cpu: 500m
+                    memory: 1Gi
 
 replicas:
-  - name: travel-web
+  - name: api-gateway
     count: 3
+  - name: auth-service
+    count: 2
+  - name: booking-service
+    count: 3
+  - name: room-service
+    count: 2
+  - name: payment-service
+    count: 3
+  - name: review-service
+    count: 2
+  - name: notification-service
+    count: 2
+  - name: content-service
+    count: 2
+  - name: blog-service
+    count: 2
 
 images:
-  - name: travel-web-app
-    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-app
+  - name: api-gateway
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-api-gateway
+    newTag: latest
+  - name: auth-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-auth-service
+    newTag: latest
+  - name: booking-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-booking-service
+    newTag: latest
+  - name: room-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-room-service
+    newTag: latest
+  - name: payment-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-payment-service
+    newTag: latest
+  - name: review-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-review-service
+    newTag: latest
+  - name: notification-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-notification-service
+    newTag: latest
+  - name: content-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-content-service
+    newTag: latest
+  - name: blog-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-blog-service
     newTag: latest
 
 labels:

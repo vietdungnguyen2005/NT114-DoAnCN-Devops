@@ -8,17 +8,162 @@ resources:
 namePrefix: staging-
 
 patches:
-  - path: patches/resources.yaml
-  - path: patches/env.yaml
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api-gateway
+      spec:
+        template:
+          spec:
+            containers:
+              - name: api-gateway
+                env:
+                  - name: NODE_ENV
+                    value: "staging"
+                  - name: API_BASE_URL
+                    value: "https://staging.travel-web.example.com"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: auth-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: auth-service
+                env:
+                  - name: NODE_ENV
+                    value: "staging"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: booking-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: booking-service
+                env:
+                  - name: NODE_ENV
+                    value: "staging"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: room-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: room-service
+                env:
+                  - name: NODE_ENV
+                    value: "staging"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: payment-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: payment-service
+                env:
+                  - name: NODE_ENV
+                    value: "staging"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: review-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: review-service
+                env:
+                  - name: NODE_ENV
+                    value: "staging"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: notification-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: notification-service
+                env:
+                  - name: NODE_ENV
+                    value: "staging"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: content-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: content-service
+                env:
+                  - name: NODE_ENV
+                    value: "staging"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: blog-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: blog-service
+                env:
+                  - name: NODE_ENV
+                    value: "staging"
 
 replicas:
-  - name: travel-web
+  - name: api-gateway
+    count: 2
+  - name: booking-service
+    count: 2
+  - name: payment-service
     count: 2
 
 images:
-  - name: travel-web-app
-    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-app
-    newTag: latest
+  - name: api-gateway
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-api-gateway
+    newTag: staging-latest
+  - name: auth-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-auth-service
+    newTag: staging-latest
+  - name: booking-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-booking-service
+    newTag: staging-latest
+  - name: room-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-room-service
+    newTag: staging-latest
+  - name: payment-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-payment-service
+    newTag: staging-latest
+  - name: review-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-review-service
+    newTag: staging-latest
+  - name: notification-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-notification-service
+    newTag: staging-latest
+  - name: content-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-content-service
+    newTag: staging-latest
+  - name: blog-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-blog-service
+    newTag: staging-latest
 
 labels:
   - pairs:

@@ -1,15 +1,21 @@
+# =============================================================
+# Deployments for Travel-Web Microservices
+# =============================================================
+
+# --- API Gateway ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: travel-web
+  name: api-gateway
   labels:
-    app: travel-web
+    app: api-gateway
+    component: gateway
 spec:
   replicas: 2
   revisionHistoryLimit: 5
   selector:
     matchLabels:
-      app: travel-web
+      app: api-gateway
   strategy:
     rollingUpdate:
       maxSurge: 1
@@ -18,72 +24,638 @@ spec:
   template:
     metadata:
       labels:
-        app: travel-web
+        app: api-gateway
+        component: gateway
     spec:
       containers:
-        - name: travel-web
-          image: travel-web-app
+        - name: api-gateway
+          image: api-gateway
           imagePullPolicy: Always
           ports:
-            - containerPort: 3000
+            - containerPort: 4000
               protocol: TCP
-
           env:
-            # Secrets from AWS Secrets Manager (via External Secrets Operator)
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: travel-web-secrets
-                  key: DATABASE_URL
-            - name: NEXTAUTH_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: travel-web-secrets
-                  key: NEXTAUTH_SECRET
-            - name: STRIPE_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: travel-web-secrets
-                  key: STRIPE_SECRET_KEY
-
-            # Plain-text environment variables
-            - name: NEXTAUTH_URL
-              value: "https://travel-web.example.com"
-            - name: NEXT_PUBLIC_APP_URL
-              value: "https://travel-web.example.com"
+            - name: PORT
+              value: "4000"
             - name: NODE_ENV
               value: "production"
-
+            - name: TRUST_PROXY
+              value: "1"
+            - name: AUTH_SERVICE_URL
+              value: "http://auth-service:3001"
+            - name: BOOKING_SERVICE_URL
+              value: "http://booking-service:3002"
+            - name: ROOM_SERVICE_URL
+              value: "http://room-service:3003"
+            - name: PAYMENT_SERVICE_URL
+              value: "http://payment-service:3004"
+            - name: REVIEW_SERVICE_URL
+              value: "http://review-service:3005"
+            - name: NOTIFICATION_SERVICE_URL
+              value: "http://notification-service:3006"
+            - name: CONTENT_SERVICE_URL
+              value: "http://content-service:3007"
+            - name: BLOG_SERVICE_URL
+              value: "http://blog-service:3008"
+            - name: REDIS_URL
+              value: "redis://redis:6379"
+            - name: SERVICE_DISCOVERY_MODE
+              value: "static"
           resources:
             requests:
-              cpu: 250m
+              cpu: 200m
               memory: 256Mi
             limits:
               cpu: 500m
               memory: 512Mi
-
           readinessProbe:
             httpGet:
-              path: /api/health
-              port: 3000
+              path: /ready
+              port: 4000
             initialDelaySeconds: 10
             periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
-
           livenessProbe:
             httpGet:
-              path: /api/health
-              port: 3000
+              path: /healthz
+              port: 4000
             initialDelaySeconds: 15
             periodSeconds: 20
-            timeoutSeconds: 5
-            failureThreshold: 3
-
           startupProbe:
             httpGet:
-              path: /api/health
-              port: 3000
+              path: /healthz
+              port: 4000
             initialDelaySeconds: 5
             periodSeconds: 5
             failureThreshold: 30
+
+---
+# --- Auth Service ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  labels:
+    app: auth-service
+    component: service
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: auth-service
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: auth-service
+        component: service
+    spec:
+      containers:
+        - name: auth-service
+          image: auth-service
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3001
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3001"
+            - name: NODE_ENV
+              value: "production"
+            - name: AUTH_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: AUTH_DATABASE_URL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: JWT_SECRET
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3001
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3001
+            initialDelaySeconds: 15
+            periodSeconds: 20
+
+---
+# --- Booking Service ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: booking-service
+  labels:
+    app: booking-service
+    component: service
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: booking-service
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: booking-service
+        component: service
+    spec:
+      containers:
+        - name: booking-service
+          image: booking-service
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3002
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3002"
+            - name: NODE_ENV
+              value: "production"
+            - name: BOOKING_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: BOOKING_DATABASE_URL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: JWT_SECRET
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: RABBITMQ_URL
+            - name: ENABLE_PAYMENT_EVENTS_CONSUMER
+              value: "true"
+          resources:
+            requests:
+              cpu: 150m
+              memory: 256Mi
+            limits:
+              cpu: 400m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3002
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3002
+            initialDelaySeconds: 20
+            periodSeconds: 20
+
+---
+# --- Room Service ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: room-service
+  labels:
+    app: room-service
+    component: service
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: room-service
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: room-service
+        component: service
+    spec:
+      containers:
+        - name: room-service
+          image: room-service
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3003
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3003"
+            - name: NODE_ENV
+              value: "production"
+            - name: ROOM_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: ROOM_DATABASE_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3003
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3003
+            initialDelaySeconds: 15
+            periodSeconds: 20
+
+---
+# --- Payment Service ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  labels:
+    app: payment-service
+    component: service
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: payment-service
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: payment-service
+        component: service
+    spec:
+      containers:
+        - name: payment-service
+          image: payment-service
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3004
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3004"
+            - name: NODE_ENV
+              value: "production"
+            - name: PAYMENT_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: PAYMENT_DATABASE_URL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: JWT_SECRET
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: RABBITMQ_URL
+            - name: VNP_TMN_CODE
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: VNP_TMN_CODE
+            - name: VNP_HASH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: VNP_HASH_SECRET
+            - name: VNP_URL
+              value: "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html"
+            - name: APP_URL
+              value: "https://travel-web.example.com"
+          resources:
+            requests:
+              cpu: 150m
+              memory: 256Mi
+            limits:
+              cpu: 400m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3004
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3004
+            initialDelaySeconds: 20
+            periodSeconds: 20
+
+---
+# --- Review Service ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: review-service
+  labels:
+    app: review-service
+    component: service
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: review-service
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: review-service
+        component: service
+    spec:
+      containers:
+        - name: review-service
+          image: review-service
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3005
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3005"
+            - name: NODE_ENV
+              value: "production"
+            - name: REVIEW_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: REVIEW_DATABASE_URL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: JWT_SECRET
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3005
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3005
+            initialDelaySeconds: 15
+            periodSeconds: 20
+
+---
+# --- Notification Service ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  labels:
+    app: notification-service
+    component: service
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: notification-service
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: notification-service
+        component: service
+    spec:
+      containers:
+        - name: notification-service
+          image: notification-service
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3006
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3006"
+            - name: NODE_ENV
+              value: "production"
+            - name: NOTIFICATION_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: NOTIFICATION_DATABASE_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: RABBITMQ_URL
+            - name: REDIS_URL
+              value: "redis://redis:6379"
+            - name: EMAIL_FROM
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: EMAIL_FROM
+            - name: SENDGRID_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: SENDGRID_API_KEY
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3006
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3006
+            initialDelaySeconds: 15
+            periodSeconds: 20
+
+---
+# --- Content Service ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: content-service
+  labels:
+    app: content-service
+    component: service
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: content-service
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: content-service
+        component: service
+    spec:
+      containers:
+        - name: content-service
+          image: content-service
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3007
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3007"
+            - name: NODE_ENV
+              value: "production"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: CONTENT_DATABASE_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3007
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3007
+            initialDelaySeconds: 15
+            periodSeconds: 20
+
+---
+# --- Blog Service ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blog-service
+  labels:
+    app: blog-service
+    component: service
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: blog-service
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: blog-service
+        component: service
+    spec:
+      containers:
+        - name: blog-service
+          image: blog-service
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3008
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3008"
+            - name: NODE_ENV
+              value: "production"
+            - name: BLOG_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: BLOG_DATABASE_URL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: travel-web-secrets
+                  key: JWT_SECRET
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3008
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3008
+            initialDelaySeconds: 15
+            periodSeconds: 20

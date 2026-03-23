@@ -1,89 +1,84 @@
 # =============================================================
-# Multi-stage Dockerfile for TRAVEL-WEB (Next.js)
-# Optimized for production with minimal image size
+# Multi-stage Dockerfile for TRAVEL-WEB Microservices
+# Builds any service via SERVICE_NAME build arg
 # =============================================================
 # Build context: web/TRAVEL-WEB/
-# Usage: docker build -t travel-web -f ci-cd/docker/Dockerfile web/TRAVEL-WEB/
+# Usage:
+#   docker build --build-arg SERVICE_NAME=api-gateway -t travel-web-api-gateway -f ci-cd/docker/Dockerfile web/TRAVEL-WEB/
+#   docker build --build-arg SERVICE_NAME=auth-service -t travel-web-auth-service -f ci-cd/docker/Dockerfile web/TRAVEL-WEB/
 # =============================================================
 
-# ---- Stage 1: Dependencies ----
-FROM node:20-alpine AS deps
-RUN apk add --no-cache libc6-compat
-WORKDIR /app
+ARG SERVICE_NAME
 
-# Copy dependency manifests
-COPY package.json package-lock.json ./
-COPY prisma ./prisma/
-
-# Install dependencies (clean install for reproducible builds)
-RUN npm ci --ignore-scripts
-# Generate Prisma client
-RUN npx prisma generate
-
-# ---- Stage 2: Builder ----
+# ---- Stage 1: Builder ----
 FROM node:20-alpine AS builder
 WORKDIR /app
 
-# Copy dependencies from deps stage
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
+ARG SERVICE_NAME
+ENV SERVICE_NAME=${SERVICE_NAME}
 
-# Set build-time environment variables
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV NODE_ENV=production
+# 1. Root manifests (cache layer)
+COPY package.json package-lock.json tsconfig.base.json ./
 
-# Dummy env vars for build time only (real values injected at runtime via Secrets Manager)
-ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy"
-ENV NEXTAUTH_SECRET="build-time-placeholder"
-ENV NEXTAUTH_URL="http://localhost:3000"
-ENV STRIPE_SECRET_KEY="sk_test_build_placeholder"
-ENV STRIPE_WEBHOOK_SECRET="whsec_build_placeholder"
-ENV CLOUDINARY_API_KEY="build_placeholder"
-ENV CLOUDINARY_API_SECRET="build_placeholder"
-ENV CLOUDINARY_CLOUD_NAME="build_placeholder"
-ENV RESEND_API_KEY="re_build_placeholder"
+# 2. All workspace sources (node_modules/dist excluded via .dockerignore)
+COPY packages ./packages
+COPY services ./services
+COPY apps ./apps
 
-# Build the Next.js application
-RUN npm run build
+# 3. Install all workspace deps from root
+RUN npm ci --legacy-peer-deps
 
-# ---- Stage 3: Production Runner ----
+# 4. Build shared packages
+RUN npm -w @travel-web/contracts run build \
+    && npm -w @travel-web/shared run build
+
+# 5. Generate Prisma client if service has prisma schema
+RUN if [ -f "./services/${SERVICE_NAME}/prisma/schema.prisma" ]; then \
+      npx prisma generate --schema=./services/${SERVICE_NAME}/prisma/schema.prisma; \
+    fi
+
+# 6. Compile the service
+RUN npm -w ${SERVICE_NAME} run build
+
+# 7. Ensure prisma dir exists (even if empty) for COPY in runner stage
+RUN mkdir -p ./services/${SERVICE_NAME}/prisma
+
+# ---- Stage 2: Production Runner ----
 FROM node:20-alpine AS runner
 WORKDIR /app
 
+ARG SERVICE_NAME
+ENV SERVICE_NAME=${SERVICE_NAME}
+
+RUN apk add --no-cache openssl
+
 # Security: run as non-root user
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+RUN addgroup --system --gid 1001 appuser \
+    && adduser --system --uid 1001 appuser
 
-# Set production environment
+# Copy shared packages
+COPY --from=builder /app/packages/contracts ./packages/contracts
+COPY --from=builder /app/packages/shared ./packages/shared
+
+# Copy service dist, package.json, and node_modules
+COPY --from=builder /app/services/${SERVICE_NAME}/dist ./services/${SERVICE_NAME}/dist
+COPY --from=builder /app/services/${SERVICE_NAME}/package.json ./services/${SERVICE_NAME}/package.json
+COPY --from=builder /app/services/${SERVICE_NAME}/node_modules ./services/${SERVICE_NAME}/node_modules
+COPY --from=builder /app/node_modules ./node_modules
+
+# Copy Prisma client if generated
+RUN if [ -d "/app/services/${SERVICE_NAME}/node_modules/.prisma" ]; then \
+      cp -r /app/services/${SERVICE_NAME}/node_modules/.prisma /app/node_modules/.prisma 2>/dev/null || true; \
+    fi
+
+# Copy Prisma schema for migrations at runtime
+COPY --from=builder /app/services/${SERVICE_NAME}/prisma ./services/${SERVICE_NAME}/prisma
+
+WORKDIR /app/services/${SERVICE_NAME}
+
 ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
 
-# Copy only the necessary files for production
-COPY --from=builder /app/public ./public
+USER appuser
 
-# Automatically leverage output traces to reduce image size
-# https://nextjs.org/docs/advanced-features/output-file-tracing
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-
-# Copy Prisma schema for runtime (needed for prisma client)
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
-COPY --from=deps /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=deps /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=deps /app/node_modules/prisma ./node_modules/prisma
-
-# Switch to non-root user
-USER nextjs
-
-# Expose port
-EXPOSE 3000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1
-
-# Start the application
-CMD ["node", "server.js"]
+# Start command determined by service's package.json "start" script
+CMD ["node", "dist/index.js"]

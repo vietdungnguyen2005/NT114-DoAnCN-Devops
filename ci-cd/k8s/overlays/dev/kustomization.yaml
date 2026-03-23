@@ -7,16 +7,165 @@ resources:
 
 namePrefix: dev-
 
+# Inline patches — override NODE_ENV per service for dev environment
 patches:
-  - path: patches/resources.yaml
-  - path: patches/env.yaml
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api-gateway
+      spec:
+        template:
+          spec:
+            containers:
+              - name: api-gateway
+                env:
+                  - name: NODE_ENV
+                    value: "development"
+                  - name: API_BASE_URL
+                    value: "https://dev.travel-web.example.com"
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 128Mi
+                  limits:
+                    cpu: 250m
+                    memory: 256Mi
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: auth-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: auth-service
+                env:
+                  - name: NODE_ENV
+                    value: "development"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: booking-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: booking-service
+                env:
+                  - name: NODE_ENV
+                    value: "development"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: room-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: room-service
+                env:
+                  - name: NODE_ENV
+                    value: "development"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: payment-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: payment-service
+                env:
+                  - name: NODE_ENV
+                    value: "development"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: review-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: review-service
+                env:
+                  - name: NODE_ENV
+                    value: "development"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: notification-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: notification-service
+                env:
+                  - name: NODE_ENV
+                    value: "development"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: content-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: content-service
+                env:
+                  - name: NODE_ENV
+                    value: "development"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: blog-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: blog-service
+                env:
+                  - name: NODE_ENV
+                    value: "development"
 
-# Không set replicas ở đây — để HPA quản lý (minReplicas: 2)
+# Không set replicas ở đây — để HPA quản lý
 
 images:
-  - name: travel-web-app
-    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-app
-    newTag: latest
+  - name: api-gateway
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-api-gateway
+    newTag: dev-latest
+  - name: auth-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-auth-service
+    newTag: dev-latest
+  - name: booking-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-booking-service
+    newTag: dev-latest
+  - name: room-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-room-service
+    newTag: dev-latest
+  - name: payment-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-payment-service
+    newTag: dev-latest
+  - name: review-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-review-service
+    newTag: dev-latest
+  - name: notification-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-notification-service
+    newTag: dev-latest
+  - name: content-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-content-service
+    newTag: dev-latest
+  - name: blog-service
+    newName: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-blog-service
+    newTag: dev-latest
 
 labels:
   - pairs:

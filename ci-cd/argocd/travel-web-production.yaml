@@ -18,7 +18,7 @@ spec:
 
   source:
     repoURL: https://gitlab.com/vietdungnguyen2005/nt114-doancn-devops.git
-    targetRevision: main  # Production tracks main branch only
+    targetRevision: microservice  # Production tracks microservice branch
     path: ci-cd/k8s/overlays/production
 
   destination:
@@ -46,8 +46,8 @@ spec:
 
   # Production-specific safeguards
   ignoreDifferences:
-    - group: argoproj.io
-      kind: Rollout
+    - group: apps
+      kind: Deployment
       jsonPointers:
         - /spec/replicas  # Allow HPA to manage replica count
 

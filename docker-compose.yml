@@ -1,14 +1,13 @@
 # =============================================================================
-# Docker Compose — TRAVEL-WEB Local Development Stack
+# Docker Compose — TRAVEL-WEB Microservice Local Development Stack
 # =============================================================================
-# Starts the full application + observability stack locally:
-#   - travel-web (Next.js on port 3000)
-#   - postgres (PostgreSQL 16 on port 5432)
-#   - prometheus (port 9090)
-#   - grafana (port 3001 — avoids clash with Next.js)
-#   - loki (port 3100)
-#   - promtail (log shipper → Loki)
-#   - cadvisor (container metrics)
+# Starts the full microservice application + infrastructure + observability:
+#   - 9 microservices (api-gateway, auth, booking, room, payment, review,
+#     notification, content, blog)
+#   - 7 PostgreSQL databases (one per domain service)
+#   - RabbitMQ (AMQP messaging)
+#   - Redis (caching / rate-limiting)
+#   - Prometheus, Grafana, Loki, Promtail, cAdvisor (observability)
 #
 # Usage:
 #   docker compose up -d
@@ -16,73 +15,342 @@
 # =============================================================================
 
 services:
-  # -------------------------------------------------------------------
-  # TRAVEL-WEB — Next.js Application
-  # -------------------------------------------------------------------
-  travel-web:
-    build:
-      context: ./web/TRAVEL-WEB
-      dockerfile: Dockerfile
-    container_name: travel-web
-    env_file:
-      - ./web/TRAVEL-WEB/.env
-    ports:
-      - "${APP_PORT:-3000}:3000"
-    environment:
-      - NODE_ENV=development
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-travel}:${POSTGRES_PASSWORD:-travel123}@postgres:5432/${POSTGRES_DB:-traveldb}?schema=public
-      - NEXT_TELEMETRY_DISABLED=1
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    networks:
-      - travel-web-network
-    labels:
-      - "app=travel-web"
-      - "component=nextjs"
+  # ===================================================================
+  #  INFRASTRUCTURE
+  # ===================================================================
 
-  # -------------------------------------------------------------------
-  # PostgreSQL — Primary Database
-  # -------------------------------------------------------------------
+  # --- PostgreSQL (shared instance, multiple databases) ---
   postgres:
     image: postgres:16-alpine
     container_name: travel-web-postgres
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     environment:
-      - POSTGRES_USER=${POSTGRES_USER:-travel}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-travel123}
-      - POSTGRES_DB=${POSTGRES_DB:-traveldb}
+      POSTGRES_USER: ${POSTGRES_USER:-travel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-travel123}
+      POSTGRES_DB: auth_db
+      POSTGRES_MULTIPLE_DATABASES: auth_db,booking_db,room_db,payment_db,review_db,notification_db,content_db,blog_db
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-travel} -d ${POSTGRES_DB:-traveldb}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-travel}"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
     networks:
       - travel-web-network
+    labels:
+      - "app=travel-web"
+      - "component=postgres"
 
-  # -------------------------------------------------------------------
-  # Prometheus — Metrics Collection and Storage
-  # -------------------------------------------------------------------
+  # --- RabbitMQ ---
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: travel-web-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - travel-web-network
+    labels:
+      - "app=travel-web"
+      - "component=rabbitmq"
+
+  # --- Redis ---
+  redis:
+    image: redis:7-alpine
+    container_name: travel-web-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - travel-web-network
+    labels:
+      - "app=travel-web"
+      - "component=redis"
+
+  # ===================================================================
+  #  MICROSERVICES
+  # ===================================================================
+
+  # --- API Gateway (port 4000) ---
+  api-gateway:
+    build:
+      context: ./web/TRAVEL-WEB
+      dockerfile: ../../ci-cd/docker/Dockerfile
+      args:
+        SERVICE_NAME: api-gateway
+    container_name: travel-web-api-gateway
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      AUTH_SERVICE_URL: http://auth-service:3001
+      BOOKING_SERVICE_URL: http://booking-service:3002
+      ROOM_SERVICE_URL: http://room-service:3003
+      PAYMENT_SERVICE_URL: http://payment-service:3004
+      REVIEW_SERVICE_URL: http://review-service:3005
+      NOTIFICATION_SERVICE_URL: http://notification-service:3006
+      CONTENT_SERVICE_URL: http://content-service:3007
+      BLOG_SERVICE_URL: http://blog-service:3008
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      auth-service:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - travel-web-network
+    labels:
+      - "app=travel-web"
+      - "component=api-gateway"
+
+  # --- Auth Service (port 3001) ---
+  auth-service:
+    build:
+      context: ./web/TRAVEL-WEB
+      dockerfile: ../../ci-cd/docker/Dockerfile
+      args:
+        SERVICE_NAME: auth-service
+    container_name: travel-web-auth-service
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      AUTH_DATABASE_URL: postgresql://${POSTGRES_USER:-travel}:${POSTGRES_PASSWORD:-travel123}@postgres:5432/auth_db?schema=public
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - travel-web-network
+    labels:
+      - "app=travel-web"
+      - "component=auth-service"
+
+  # --- Booking Service (port 3002) ---
+  booking-service:
+    build:
+      context: ./web/TRAVEL-WEB
+      dockerfile: ../../ci-cd/docker/Dockerfile
+      args:
+        SERVICE_NAME: booking-service
+    container_name: travel-web-booking-service
+    environment:
+      NODE_ENV: development
+      PORT: 3002
+      BOOKING_DATABASE_URL: postgresql://${POSTGRES_USER:-travel}:${POSTGRES_PASSWORD:-travel123}@postgres:5432/booking_db?schema=public
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - travel-web-network
+    labels:
+      - "app=travel-web"
+      - "component=booking-service"
+
+  # --- Room Service (port 3003) ---
+  room-service:
+    build:
+      context: ./web/TRAVEL-WEB
+      dockerfile: ../../ci-cd/docker/Dockerfile
+      args:
+        SERVICE_NAME: room-service
+    container_name: travel-web-room-service
+    environment:
+      NODE_ENV: development
+      PORT: 3003
+      ROOM_DATABASE_URL: postgresql://${POSTGRES_USER:-travel}:${POSTGRES_PASSWORD:-travel123}@postgres:5432/room_db?schema=public
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - travel-web-network
+    labels:
+      - "app=travel-web"
+      - "component=room-service"
+
+  # --- Payment Service (port 3004) ---
+  payment-service:
+    build:
+      context: ./web/TRAVEL-WEB
+      dockerfile: ../../ci-cd/docker/Dockerfile
+      args:
+        SERVICE_NAME: payment-service
+    container_name: travel-web-payment-service
+    environment:
+      NODE_ENV: development
+      PORT: 3004
+      PAYMENT_DATABASE_URL: postgresql://${POSTGRES_USER:-travel}:${POSTGRES_PASSWORD:-travel123}@postgres:5432/payment_db?schema=public
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me}
+      VNP_TMN_CODE: ${VNP_TMN_CODE:-DEMO}
+      VNP_HASH_SECRET: ${VNP_HASH_SECRET:-DEMO}
+      VNP_URL: ${VNP_URL:-https://sandbox.vnpayment.vn/paymentv2/vpcpay.html}
+      VNP_RETURN_URL: ${VNP_RETURN_URL:-http://localhost:4000/api/payment/vnpay-return}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - travel-web-network
+    labels:
+      - "app=travel-web"
+      - "component=payment-service"
+
+  # --- Review Service (port 3005) ---
+  review-service:
+    build:
+      context: ./web/TRAVEL-WEB
+      dockerfile: ../../ci-cd/docker/Dockerfile
+      args:
+        SERVICE_NAME: review-service
+    container_name: travel-web-review-service
+    environment:
+      NODE_ENV: development
+      PORT: 3005
+      REVIEW_DATABASE_URL: postgresql://${POSTGRES_USER:-travel}:${POSTGRES_PASSWORD:-travel123}@postgres:5432/review_db?schema=public
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - travel-web-network
+    labels:
+      - "app=travel-web"
+      - "component=review-service"
+
+  # --- Notification Service (port 3006) ---
+  notification-service:
+    build:
+      context: ./web/TRAVEL-WEB
+      dockerfile: ../../ci-cd/docker/Dockerfile
+      args:
+        SERVICE_NAME: notification-service
+    container_name: travel-web-notification-service
+    environment:
+      NODE_ENV: development
+      PORT: 3006
+      NOTIFICATION_DATABASE_URL: postgresql://${POSTGRES_USER:-travel}:${POSTGRES_PASSWORD:-travel123}@postgres:5432/notification_db?schema=public
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672
+      REDIS_URL: redis://redis:6379
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY:-SG.test}
+      EMAIL_FROM: ${EMAIL_FROM:-noreply@travel-web.example.com}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - travel-web-network
+    labels:
+      - "app=travel-web"
+      - "component=notification-service"
+
+  # --- Content Service (port 3007) ---
+  content-service:
+    build:
+      context: ./web/TRAVEL-WEB
+      dockerfile: ../../ci-cd/docker/Dockerfile
+      args:
+        SERVICE_NAME: content-service
+    container_name: travel-web-content-service
+    environment:
+      NODE_ENV: development
+      PORT: 3007
+      DATABASE_URL: postgresql://${POSTGRES_USER:-travel}:${POSTGRES_PASSWORD:-travel123}@postgres:5432/content_db?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - travel-web-network
+    labels:
+      - "app=travel-web"
+      - "component=content-service"
+
+  # --- Blog Service (port 3008) ---
+  blog-service:
+    build:
+      context: ./web/TRAVEL-WEB
+      dockerfile: ../../ci-cd/docker/Dockerfile
+      args:
+        SERVICE_NAME: blog-service
+    container_name: travel-web-blog-service
+    environment:
+      NODE_ENV: development
+      PORT: 3008
+      BLOG_DATABASE_URL: postgresql://${POSTGRES_USER:-travel}:${POSTGRES_PASSWORD:-travel123}@postgres:5432/blog_db?schema=public
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - travel-web-network
+    labels:
+      - "app=travel-web"
+      - "component=blog-service"
+
+  # ===================================================================
+  #  OBSERVABILITY
+  # ===================================================================
+
+  # --- Prometheus ---
   prometheus:
     image: prom/prometheus:v2.51.0
     container_name: travel-web-prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
-      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
-      - "--web.console.templates=/usr/share/prometheus/consoles"
       - "--storage.tsdb.retention.time=15d"
       - "--web.enable-lifecycle"
       - "--web.enable-remote-write-receiver"
@@ -95,20 +363,16 @@ services:
     networks:
       - travel-web-network
 
-  # -------------------------------------------------------------------
-  # Grafana — Visualization and Dashboards
-  # -------------------------------------------------------------------
+  # --- Grafana ---
   grafana:
     image: grafana/grafana:10.4.0
     container_name: travel-web-grafana
     ports:
-      - "${GRAFANA_PORT:-3001}:3000"
+      - "${GRAFANA_PORT:-3100}:3000"
     environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_SERVER_ROOT_URL=http://localhost:${GRAFANA_PORT:-3001}
-      - GF_INSTALL_PLUGINS=
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -119,15 +383,13 @@ services:
     networks:
       - travel-web-network
 
-  # -------------------------------------------------------------------
-  # Loki — Log Aggregation
-  # -------------------------------------------------------------------
+  # --- Loki ---
   loki:
     image: grafana/loki:2.9.5
     container_name: travel-web-loki
     command: -config.file=/etc/loki/local-config.yaml
     ports:
-      - "3100:3100"
+      - "3101:3100"
     volumes:
       - ./monitoring/loki-config.yaml:/etc/loki/local-config.yaml:ro
       - loki-data:/loki
@@ -135,9 +397,7 @@ services:
     networks:
       - travel-web-network
 
-  # -------------------------------------------------------------------
-  # Promtail — Log Shipper (sends Docker logs to Loki)
-  # -------------------------------------------------------------------
+  # --- Promtail ---
   promtail:
     image: grafana/promtail:2.9.5
     container_name: travel-web-promtail
@@ -155,9 +415,7 @@ services:
     networks:
       - travel-web-network
 
-  # -------------------------------------------------------------------
-  # cAdvisor — Container Metrics Exporter
-  # -------------------------------------------------------------------
+  # --- cAdvisor ---
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: travel-web-cadvisor
@@ -215,6 +473,10 @@ networks:
 
 volumes:
   postgres-data:
+    driver: local
+  rabbitmq-data:
+    driver: local
+  redis-data:
     driver: local
   prometheus-data:
     driver: local

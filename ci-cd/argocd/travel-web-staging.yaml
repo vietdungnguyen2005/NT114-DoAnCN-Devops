@@ -44,8 +44,8 @@ spec:
   revisionHistoryLimit: 10
 
   ignoreDifferences:
-    - group: argoproj.io
-      kind: Rollout
+    - group: apps
+      kind: Deployment
       jsonPointers:
         - /spec/replicas
 

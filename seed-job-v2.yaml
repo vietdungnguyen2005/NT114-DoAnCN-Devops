@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: prisma-seed-v2
+  name: microservice-seed
   namespace: travel-web-dev
 spec:
   backoffLimit: 2
@@ -10,17 +10,49 @@ spec:
     spec:
       containers:
       - name: seed
-        image: 443014729163.dkr.ecr.ap-southeast-1.amazonaws.com/travel-web-app:latest
+        image: node:20-alpine
         command: ["node", "/scripts/seed.js"]
-        workingDir: /app
         env:
-        - name: NODE_PATH
-          value: /app/node_modules
-        - name: DATABASE_URL
+        - name: AUTH_DB_DATABASE_URL
           valueFrom:
             secretKeyRef:
               name: travel-web-secrets
-              key: DATABASE_URL
+              key: AUTH_DATABASE_URL
+        - name: BOOKING_DB_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: travel-web-secrets
+              key: BOOKING_DATABASE_URL
+        - name: ROOM_DB_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: travel-web-secrets
+              key: ROOM_DATABASE_URL
+        - name: PAYMENT_DB_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: travel-web-secrets
+              key: PAYMENT_DATABASE_URL
+        - name: REVIEW_DB_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: travel-web-secrets
+              key: REVIEW_DATABASE_URL
+        - name: NOTIFICATION_DB_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: travel-web-secrets
+              key: NOTIFICATION_DATABASE_URL
+        - name: CONTENT_DB_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: travel-web-secrets
+              key: CONTENT_DATABASE_URL
+        - name: BLOG_DB_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: travel-web-secrets
+              key: BLOG_DATABASE_URL
         volumeMounts:
         - name: seed-script
           mountPath: /scripts
